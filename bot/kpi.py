@@ -17,26 +17,62 @@ from bot.executor import Executor, unwrap           # noqa: E402
 def main() -> None:
     db = sqlite3.connect(Path(__file__).resolve().parent.parent / "bot" / "journal.db")
 
-    # 1) фактическая комиссия по ролям; для входов — классификация maker/taker
-    print("KPI тариф (по исполнениям с комиссией > 0; строки NEW/CANCELED не считаются):")
-    for role, name in [("E", "вход"), ("T", "тейк"), ("S", "стоп")]:
-        rows = db.execute(
-            "SELECT price, qty, commission FROM fills WHERE role=? AND CAST(price AS REAL)>0 "
-            "AND CAST(commission AS REAL)>0", (role,)).fetchall()
-        if not rows:
-            print(f"  {name:<16} исполнений с комиссией пока нет")
+    # 1) КАНОНИЧЕСКАЯ таблица комиссий: вход-мейкер / вход-тейкер / тейк / стоп
+    import numpy as np
+    print("KPI тариф — каноническая таблица (окно: накопительно с 17.09; источник: fills):")
+    rows = db.execute(
+        "SELECT role, symbol, price, qty, commission FROM fills WHERE CAST(price AS REAL)>0 "
+        "AND CAST(commission AS REAL)>0").fetchall()
+    recs = []
+    for role, sym, p, q, c in rows:
+        p, q, c = float(p), float(q), float(c)
+        recs.append(dict(role=role, sym=sym, n=p*q, rate=c/(p*q)*10000))
+    def block(name, rs):
+        if not rs:
+            print(f"  {name:<14} нет данных"); return
+        rates = np.array([r["rate"] for r in rs])
+        notional = sum(r["n"] for r in rs)
+        fees = sum(r["rate"]/10000*r["n"] for r in rs)
+        print(f"  {name:<14} {len(rs):>5} исп. | оборот {notional:>10,.0f} | "
+              f"комиссии {fees:>7.2f} | ставка: медиана {np.median(rates):.2f} бп, "
+              f"по объёму {fees/notional*10000:.2f} бп")
+    e_recs = [r for r in recs if r["role"] == "E"]
+    block("вход-мейкер", [r for r in e_recs if r["rate"] <= 3])
+    block("вход-тейкер", [r for r in e_recs if r["rate"] > 4])
+    block("вход-серые", [r for r in e_recs if 3 < r["rate"] <= 4])
+    block("тейк-профит", [r for r in recs if r["role"] == "T"])
+    block("стоп", [r for r in recs if r["role"] == "S"])
+
+    # 2) доля тейкерских входов: по счёту, по ОБЪЁМУ, по квартилям волатильности
+    e_all = [r for r in e_recs]
+    if e_all:
+        tv = sum(r["n"] for r in e_all if r["rate"] > 4)
+        av = sum(r["n"] for r in e_all)
+        print(f"KPI тейкерские входы: по счёту {len([r for r in e_all if r['rate']>4])}/"
+              f"{len(e_all)} ({len([r for r in e_all if r['rate']>4])/len(e_all)*100:.0f}%), "
+              f"по ОБЪЁМУ {tv/av*100:.0f}%  [mainnet-порог: <=10% зелёный, 10-25 жёлтый, >25 красный]")
+    sig = db.execute("SELECT symbol, payload FROM events WHERE kind='signal_entry'").fetchall()
+    sym_vol = {}
+    for s, pl in sig:
+        d = json.loads(pl)
+        sym_vol.setdefault(s, []).append(float(d.get("atr0") or 0) * 12)
+    sym_vol = {s: float(np.median(a)) for s, a in sym_vol.items()}
+    q1, q2, q3 = np.percentile(list(sym_vol.values()), [25, 50, 75])
+    buckets = {}
+    for r in recs:
+        if r["role"] != "E" or r["sym"] not in sym_vol:
             continue
-        import numpy as np
-        rates = np.array([float(c) / (float(p) * float(q)) * 10000 for p, q, c in rows])
-        notional = sum(float(p) * float(q) for p, q, _ in rows)
-        fee = sum(float(c) for _, _, c in rows)
-        line = (f"  {name:<16} {len(rows):>4} исп., медиана {np.median(rates):.2f} бп, "
-                f"среднее {rates.mean():.2f} бп, взвешенная {fee/notional*10000:.2f} бп")
-        if role == "E":
-            taker = rates > 4                      # мейкер с BNB-скидкой ~1.8 бп, тейкер ~4.5
-            line += (f" | тейкерских входов: {taker.sum()} шт "
-                     f"({taker.mean()*100:.0f}%) — канал издержек при пробое насквозь")
-        print(line)
+        v = sym_vol[r["sym"]]
+        qb = ("Q1 спокойные" if v <= q1 else "Q2" if v <= q2 else
+              "Q3" if v <= q3 else "Q4 дикие")
+        buckets.setdefault(qb, []).append(r)
+    for qb in ["Q1 спокойные", "Q2", "Q3", "Q4 дикие"]:
+        rs = buckets.get(qb, [])
+        if not rs:
+            continue
+        tv = sum(r["n"] for r in rs if r["rate"] > 4)
+        av = sum(r["n"] for r in rs)
+        print(f"  {qb:<14} {len(rs):>4} входов, тейкеры в ОБЪЁМЕ {tv/av*100:4.0f}%")
 
     # 2) протрузии (глубина прохода цены сквозь уровень) — по средам раздельно
     tp = {"demo": [], "mainnet": []}
