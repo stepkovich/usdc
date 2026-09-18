@@ -69,7 +69,6 @@ class BotConfig(BaseModel):
     notional_buffer: Decimal = Decimal("1.1")  # пол = minNotional монеты x буфер
     leverage: int = 20                         # запас до ликвидации > 2x худшего стопа
     dry_run: bool = False                      # True: сигналы только в журнал
-    notional: Decimal = Decimal("50")          # LEGACY (не используется)
 
     # учёт «как будто комиссии нет» (ваш тариф) + реальность демо
     assume_maker_fee: Decimal = Decimal("0")       # тариф: мейкер 0
@@ -98,7 +97,10 @@ class BotConfig(BaseModel):
             api_key=os.environ.get("API_KEY", ""),
             api_secret=os.environ.get("API_SECRET", ""),
             target_pct=Decimal(os.environ.get("BOT_TARGET_PCT", "0.005")),
-            notional=Decimal(os.environ.get("BOT_NOTIONAL", "50")),
+            risk_pct=Decimal(os.environ.get("BOT_RISK_PCT", "0.0015")),
+            max_notional=Decimal(os.environ.get("BOT_MAX_NOTIONAL", "1500")),
+            notional_buffer=Decimal(os.environ.get("BOT_NOTIONAL_BUFFER", "1.1")),
+            leverage=int(os.environ.get("BOT_LEVERAGE", "20")),
             dry_run=os.environ.get("BOT_DRY_RUN", "1") == "1",
         )
         if os.environ.get("BOT_SYMBOLS"):

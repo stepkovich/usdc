@@ -102,7 +102,7 @@ async def main() -> None:
     try:
         # 4) дальняя LIMIT заявка (на 10% ниже рынка — не исполнится)
         entry_px = f.round_price(Decimal(str(last)) * Decimal("0.90"))
-        qty = f.qty_for_notional(cfg.notional, entry_px)
+        qty = f.qty_for_notional(Decimal("50"), entry_px)   # тестовый объём
         log.info("ставим дальнюю заявку BUY %s @%s (рынок %.4f)", qty, entry_px, last)
         oid = ex.place_entry_limit(SYM, "BUY", entry_px, qty, cid_e)
         ok_new = await wait_evt("NEW", cid_e, 20)
