@@ -17,16 +17,26 @@ from bot.executor import Executor, unwrap           # noqa: E402
 def main() -> None:
     db = sqlite3.connect(Path(__file__).resolve().parent.parent / "bot" / "journal.db")
 
-    # 1) фактическая комиссия по ролям (бп нотионала)
-    print("KPI тариф (по исполнениям журнала):")
-    for role, name in [("E", "вход (мейкер)"), ("T", "тейк (мейкер)"), ("S", "стоп (тейкер)")]:
+    # 1) фактическая комиссия по ролям; для входов — классификация maker/taker
+    print("KPI тариф (по исполнениям с комиссией > 0; строки NEW/CANCELED не считаются):")
+    for role, name in [("E", "вход"), ("T", "тейк"), ("S", "стоп")]:
         rows = db.execute(
-            "SELECT price, qty, commission FROM fills WHERE role=? AND CAST(price AS REAL)>0",
-            (role,)).fetchall()
+            "SELECT price, qty, commission FROM fills WHERE role=? AND CAST(price AS REAL)>0 "
+            "AND CAST(commission AS REAL)>0", (role,)).fetchall()
+        if not rows:
+            print(f"  {name:<16} исполнений с комиссией пока нет")
+            continue
+        import numpy as np
+        rates = np.array([float(c) / (float(p) * float(q)) * 10000 for p, q, c in rows])
         notional = sum(float(p) * float(q) for p, q, _ in rows)
-        fee = sum(float(c or 0) for _, _, c in rows)
-        if notional:
-            print(f"  {name:<16} {len(rows):>4} исп., ставка {fee/notional*100:.4f}%")
+        fee = sum(float(c) for _, _, c in rows)
+        line = (f"  {name:<16} {len(rows):>4} исп., медиана {np.median(rates):.2f} бп, "
+                f"среднее {rates.mean():.2f} бп, взвешенная {fee/notional*10000:.2f} бп")
+        if role == "E":
+            taker = rates > 4                      # мейкер с BNB-скидкой ~1.8 бп, тейкер ~4.5
+            line += (f" | тейкерских входов: {taker.sum()} шт "
+                     f"({taker.mean()*100:.0f}%) — канал издержек при пробое насквозь")
+        print(line)
 
     # 2) протрузии (глубина прохода цены сквозь уровень) — по средам раздельно
     tp = {"demo": [], "mainnet": []}
