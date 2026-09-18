@@ -81,13 +81,20 @@ class Bot:
         log.info("режим=%s пар=%d исполнение=%s рынок=%s",
                  cfg.mode.value, len(self.symbols), cfg.exec_rest_url,
                  cfg.market_streams_url)
-        if not cfg.dry_run:
+        try:
             self.balance_snapshot = await asyncio.to_thread(
                 self.exec.account_wallet_balance, "USDC")
-            log.info("снимок баланса: %s USDC -> риск-бюджет одной сделки %s USDC "
-                     "(%s%% баланса)", self.balance_snapshot,
-                     (self.balance_snapshot * cfg.risk_pct).quantize(Decimal("0.0001")),
-                     cfg.risk_pct * 100)
+        except Exception as e:
+            if cfg.dry_run:
+                self.balance_snapshot = Decimal("1000")   # виртуальный баланс dry-run
+                log.warning("dry-run: баланс биржи недоступен (%s) — "
+                            "виртуальный снимок %s USDC", e, self.balance_snapshot)
+            else:
+                raise
+        log.info("снимок баланса: %s USDC -> риск-бюджет одной сделки %s USDC "
+                 "(%s%% баланса)", self.balance_snapshot,
+                 (self.balance_snapshot * cfg.risk_pct).quantize(Decimal("0.0001")),
+                 cfg.risk_pct * 100)
         if not cfg.dry_run:
             # режим позиции (хедж/оневей) — до любых ордеров
             await asyncio.to_thread(self.exec.ensure_position_mode, True)
@@ -103,6 +110,11 @@ class Bot:
             try:
                 match a:
                     case PlaceEntry():
+                        if self.balance_snapshot is None:
+                            log.warning("%s: снимок баланса не готов — сигнал пропущен",
+                                        a.symbol)
+                            self.strategy.state(a.symbol).pending = None
+                            continue
                         f = self.filters[a.symbol]
                         price = f.round_price(a.price)
                         stop_dist = a.atr0 * self.cfg.stop_atr_mult
@@ -387,8 +399,15 @@ class Bot:
                        asyncio.create_task(self.watchdog())]
         log.info("бот запущен: пары=%d dry_run=%s цель=%s", len(self.symbols),
                  self.cfg.dry_run, self.cfg.target_pct)
+        bars_seen = 0
+        last_report = time.time()
         while not self._stop.is_set():
             sym, bar = await self.feed.closed_bars()
+            bars_seen += 1
+            if time.time() - last_report >= 300:      # пульс: бары капают из стрима
+                log.info("пульс: %d закрытых баров за 5 мин", bars_seen)
+                bars_seen = 0
+                last_report = time.time()
             h = self.feed.hist[sym]
             if h.ready:
                 acts = self.strategy.on_closed_bar(h, bar)

@@ -21,6 +21,7 @@ from binance_sdk_derivatives_trading_usds_futures.rest_api.models import (
     KlineCandlestickDataIntervalEnum,
 )
 from binance_sdk_derivatives_trading_usds_futures.websocket_streams.models import (
+    KlineCandlestickStreamsResponse,
     KlineCandlestickStreamsIntervalEnum,
 )
 
@@ -146,13 +147,16 @@ class MarketFeed:
                 mode=WebsocketMode.POOL, pool_size=4,
                 reconnect_attempts=10, reconnect_delay=5000))
         self._conn = await self._streams_client.websocket_streams.create_connection()
-        # SDK принимает только одиночный символ в подписке — подписываем по одной
-        for s in symbols:
-            stream = await self._conn.kline_candlestick_streams(
-                symbol=s.lower(),
-                interval=KlineCandlestickStreamsIntervalEnum["INTERVAL_1m"].value)
-            stream.on("message", self._on_kline)
-        log.info("стримы подписаны: %d пар", len(symbols))
+        # батч-подписка: один SUBSCRIBE с массивом имён (лимит биржи: 200 стримов
+        # на соединение); базовый subscribe группирует их по соединениям пула
+        names = [f"{s.lower()}@kline_1m" for s in symbols]
+        await self._conn.subscribe(
+            streams=names,
+            response_model=KlineCandlestickStreamsResponse,
+            stream_url="market")
+        for name in names:
+            self._conn.on("message", self._on_kline, name)
+        log.info("стримы подписаны одним запросом: %d пар", len(names))
 
     def _on_kline(self, model) -> None:
         try:
