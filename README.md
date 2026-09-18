@@ -49,3 +49,4 @@ docker compose exec scalper python -m bot.plumbing_test  # тест ордерн
 - `./data/journal.db` — SQLite: события, исполнения, сделки (таблица trades)
 - `python -m bot.reconcile <часов>` — авторитетная сверка PnL с биржей
 # usdc
+# usdc
