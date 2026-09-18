@@ -72,6 +72,7 @@ class BotConfig(BaseModel):
     max_notional: Decimal = Decimal("1500")    # потолок нотионала позиции
     notional_buffer: Decimal = Decimal("1.1")  # пол = minNotional монеты x буфер
     daily_loss_pct: Decimal = Decimal("0.02")  # дневной лимит убытка НА НАПРАВЛЕНИЕ
+    total_daily_loss_pct: Decimal = Decimal("0.03")  # общий дневной кап на ОБЕ стороны
     leverage: int = 20                         # запас до ликвидации > 2x худшего стопа
     dry_run: bool = False                      # True: сигналы только в журнал
 
@@ -106,6 +107,7 @@ class BotConfig(BaseModel):
             max_notional=Decimal(os.environ.get("BOT_MAX_NOTIONAL", "1500")),
             notional_buffer=Decimal(os.environ.get("BOT_NOTIONAL_BUFFER", "1.1")),
             daily_loss_pct=Decimal(os.environ.get("BOT_DAILY_LOSS_PCT", "0.02")),
+            total_daily_loss_pct=Decimal(os.environ.get("BOT_TOTAL_DAILY_LOSS_PCT", "0.03")),
             leverage=int(os.environ.get("BOT_LEVERAGE", "20")),
             dry_run=os.environ.get("BOT_DRY_RUN", "1") == "1",
         )

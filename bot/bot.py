@@ -57,6 +57,8 @@ class Bot:
         # дневные счётчики PnL по направлениям (сброс при суточном снимке баланса)
         self.daily_pnl: dict[str, Decimal] = {"LONG": Decimal(0), "SHORT": Decimal(0)}
         self.daily_locked: dict[str, bool] = {"LONG": False, "SHORT": False}
+        self.daily_total_pnl: Decimal = Decimal(0)
+        self.daily_total_locked: bool = False
         self._day_key = datetime.now(timezone.utc).date()
         self._day_start_ms = int(datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
@@ -118,6 +120,16 @@ class Bot:
             try:
                 match a:
                     case PlaceEntry():
+                        # общий дневной кап (V-образный отскок): суммарный убыток дня
+                        if (self.cfg.total_daily_loss_pct > 0 and self.balance_snapshot
+                                and self.daily_total_pnl
+                                <= -self.balance_snapshot * self.cfg.total_daily_loss_pct):
+                            log.warning("%s: сигнал пропущен — общий дневной кап "
+                                        "(сегодня всего %s)", a.symbol,
+                                        self.daily_total_pnl.quantize(Decimal("0.01")))
+                            self.ledger.event("total_daily_limit_skip", a.symbol, {})
+                            self.strategy.state(a.symbol).pending = None
+                            continue
                         if self.balance_snapshot is None:
                             log.warning("%s: снимок баланса не готов — сигнал пропущен",
                                         a.symbol)
@@ -159,9 +171,15 @@ class Bot:
                                  stop_dist * 100, natural, size,
                                  floor.quantize(Decimal("0.01")),
                                  self.cfg.max_notional)
+                        book = self.feed.book.get(a.symbol)
+                        spread_bp = None
+                        if book and book[0] > 0:
+                            mid = (book[0] + book[1]) / 2
+                            spread_bp = float((book[1] - book[0]) / mid * 10000)
                         self.ledger.event("signal_entry", a.symbol, {
                             "side": a.side.value, "price": str(price),
-                            "qty": str(qty), "atr0": str(a.atr0), "cid": a.client_id})
+                            "qty": str(qty), "atr0": str(a.atr0), "cid": a.client_id,
+                            "spread_bp": spread_bp})
                         if self.cfg.dry_run:
                             log.info("[DRY] вход %s %s %s @%s", a.symbol,
                                      a.side.value, qty, price)
@@ -172,6 +190,13 @@ class Bot:
                             a.client_id)
                         self.strategy.entry_placed(a.symbol, oid or 0, qty)
                     case CancelEntry():
+                        self.ledger.event("cancel_entry", a.symbol,
+                                          {"order_id": a.order_id, "reason": a.reason,
+                                           "min_gap_bp": round(a.gap_bp, 1)})
+                        if a.reason == "timeout":
+                            log.info("%s: заявка не исполнена за %d мин; ближайший "
+                                     "подход к уровню %.0f бп", a.symbol,
+                                     self.cfg.wait_bars, a.gap_bp)
                         if not self.cfg.dry_run and a.order_id:
                             await asyncio.to_thread(
                                 self.exec.cancel_order, a.symbol, a.order_id)
@@ -278,6 +303,7 @@ class Bot:
                     # дневные счётчики по направлениям + срабатывание лимита
                     d_side = {"BUY": "LONG", "SELL": "SHORT"}.get(acc.get("side", "?"))
                     if d_side:
+                        self.daily_total_pnl += acc["pnl"]
                         self.daily_pnl[d_side] += acc["pnl"]
                         limit = self.balance_snapshot * self.cfg.daily_loss_pct
                         if (self.cfg.daily_loss_pct > 0 and not self.daily_locked[d_side]
@@ -316,6 +342,8 @@ class Bot:
                      self.daily_locked["LONG"], self.daily_locked["SHORT"])
         self.daily_pnl = {"LONG": Decimal(0), "SHORT": Decimal(0)}
         self.daily_locked = {"LONG": False, "SHORT": False}
+        self.daily_total_pnl = Decimal(0)
+        self.daily_total_locked = False
 
     def _refresh_locks(self) -> None:
         """Пересчёт блокировок направленного дневного лимита по текущим цифрам."""

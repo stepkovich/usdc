@@ -21,6 +21,7 @@ from binance_sdk_derivatives_trading_usds_futures.rest_api.models import (
     KlineCandlestickDataIntervalEnum,
 )
 from binance_sdk_derivatives_trading_usds_futures.websocket_streams.models import (
+    IndividualSymbolBookTickerStreamsResponse,
     KlineCandlestickStreamsResponse,
     KlineCandlestickStreamsIntervalEnum,
 )
@@ -102,6 +103,7 @@ class MarketFeed:
         self._streams_client: DerivativesTradingUsdsFutures | None = None
         self._conn = None
         self.last_message_ts = 0.0
+        self.book: dict[str, tuple[Decimal, Decimal]] = {}   # sym -> (bid, ask)
         self._queue: asyncio.Queue[tuple[str, Bar]] = asyncio.Queue(maxsize=10000)
 
     # ---------- тёплый старт ----------
@@ -159,7 +161,15 @@ class MarketFeed:
             stream_url="market")
         for name in names:
             self._conn.on("message", self._on_kline, name)
-        log.info("стримы подписаны одним запросом: %d пар", len(names))
+        # bookTicker: лучший bid/ask каждой пары — спред в момент сигнала
+        bnames = [f"{s.lower()}@bookTicker" for s in symbols]
+        await self._conn.subscribe(
+            streams=bnames,
+            response_model=IndividualSymbolBookTickerStreamsResponse,
+            stream_url="market")
+        for name in bnames:
+            self._conn.on("message", self._on_book, name)
+        log.info("стримы подписаны одним запросом: %d пар (+bookTicker)", len(names))
 
     def _on_kline(self, model) -> None:
         try:
@@ -176,6 +186,19 @@ class MarketFeed:
                 self._queue.put_nowait((sym, bar))
         except Exception:                    # noqa: BLE001 — фид не должен падать
             log.exception("kline parse error")
+
+    def _on_book(self, model) -> None:
+        try:
+            d = model.model_dump(by_alias=True) if hasattr(model, "model_dump") else dict(model)
+            inst = d.get("actual_instance")
+            if isinstance(inst, dict):
+                d = inst
+            sym, bid, ask = d.get("s"), d.get("b"), d.get("a")
+            if sym and bid and ask:
+                self.book[sym] = (Decimal(bid), Decimal(ask))
+                self.last_message_ts = time.time()
+        except Exception:                    # noqa: BLE001
+            pass                              # bookTicker высокочастотный — не логируем
 
     async def closed_bars(self) -> tuple[str, Bar]:
         return await self._queue.get()

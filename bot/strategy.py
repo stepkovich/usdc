@@ -35,6 +35,7 @@ class CancelEntry:
     symbol: str
     order_id: int
     reason: str
+    gap_bp: float = 0.0        # мин. расстояние цены до уровня за ожидание, бп
 
 
 @dataclass
@@ -94,15 +95,21 @@ class Strategy:
         # 2) ожидание отката: проверка отмены заявки
         if st.pending:
             p = st.pending
+            # насколько близко цена подходила к уровню (для статистики упущенных входов)
+            gap = abs(bar.close - p["level"]) / p["level"]
+            p["min_gap"] = min(p.get("min_gap", 1.0), gap)
             if st.bars_seen > p["deadline"]:
-                acts.append(CancelEntry(h.symbol, p["order_id"], "timeout"))
+                acts.append(CancelEntry(h.symbol, p["order_id"], "timeout",
+                                        p.get("min_gap", 1.0) * 10000))
                 st.pending = None
             else:
                 if p["side"] is Side.LONG and bar.close <= p["level"] * (1 - cfg.cancel_ratio * p["atr0"]):
-                    acts.append(CancelEntry(h.symbol, p["order_id"], "retest_failed"))
+                    acts.append(CancelEntry(h.symbol, p["order_id"], "retest_failed",
+                                            p.get("min_gap", 1.0) * 10000))
                     st.pending = None
                 elif p["side"] is Side.SHORT and bar.close >= p["level"] * (1 + cfg.cancel_ratio * p["atr0"]):
-                    acts.append(CancelEntry(h.symbol, p["order_id"], "retest_failed"))
+                    acts.append(CancelEntry(h.symbol, p["order_id"], "retest_failed",
+                                            p.get("min_gap", 1.0) * 10000))
                     st.pending = None
             return acts
 

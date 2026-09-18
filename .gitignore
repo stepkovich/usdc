@@ -1,0 +1,9 @@
+.env
+data/
+.venv/
+.idea/
+__pycache__/
+*.log
+bot/journal.db
+verification/
+trend.py
