@@ -44,7 +44,7 @@ class Bot:
         import os
         journal_path = Path(os.environ.get("BOT_JOURNAL_PATH",
                                            ROOT / "bot" / "journal.db"))
-        self.ledger = Ledger(journal_path)
+        self.ledger = Ledger(journal_path, env=cfg.mode.value)
         self.feed = MarketFeed(cfg)
         self.strategy = Strategy(cfg)
         self.exec: Executor | None = None
@@ -272,6 +272,33 @@ class Bot:
                     sym, {"fees": D0, "maker": D0, "pnl": D0, "orders": {},
                           "done": True, "open": False})
                 # новая сделка начинается с NEW входной заявки: обнуляем накопители
+                # протрузия: насколько цена прошла СКВОЗЬ уровень в минуту исполнения
+                fb = self.feed.forming.get(sym)
+                if fb and role in ("E", "T") and status in ("FILLED", "PARTIALLY_FILLED"):
+                    try:
+                        hi, lo = fb[1], fb[2]
+                        if role == "E" and self.strategy.state(sym).pending:
+                            lvl = self.strategy.state(sym).pending["level"]
+                            depth = (lvl - lo) / lvl if o.get("S") == "BUY" \
+                                else (hi - lvl) / lvl
+                        elif role == "T":
+                            stp = self.strategy.state(sym).position or {}
+                            tp = stp.get("tp_price")
+                            side = stp.get("side")
+                            if tp is None:
+                                tp = (Decimal(str(o.get("ap") or 0))
+                                      * (1 + self.cfg.target_pct))
+                                side = "LONG" if o.get("S") == "SELL" else "SHORT"
+                            depth = (hi - tp) / tp if side == "LONG" \
+                                else (tp - lo) / tp
+                        else:
+                            depth = None
+                        if depth is not None and depth >= 0:
+                            self.ledger.event("fill_protrusion", sym, {
+                                "kind": "entry" if role == "E" else "tp",
+                                "depth_bp": round(float(depth) * 10000, 1)})
+                    except Exception:
+                        pass                      # измерение не должно ломать торговлю
                 if role == "E" and status == "NEW" and not acc.get("open"):
                     acc.update({"fees": D0, "maker": D0, "pnl": D0,
                                 "orders": {}, "done": False, "open": True})

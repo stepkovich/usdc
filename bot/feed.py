@@ -104,6 +104,7 @@ class MarketFeed:
         self._conn = None
         self.last_message_ts = 0.0
         self.book: dict[str, tuple[Decimal, Decimal]] = {}   # sym -> (bid, ask)
+        self.forming: dict[str, tuple[Decimal, Decimal, Decimal, Decimal]] = {}  # o,h,l,c
         self._queue: asyncio.Queue[tuple[str, Bar]] = asyncio.Queue(maxsize=10000)
 
     # ---------- тёплый старт ----------
@@ -176,9 +177,14 @@ class MarketFeed:
             d = model.model_dump(by_alias=True) if hasattr(model, "model_dump") else dict(model)
             k = d.get("k") or {}
             self.last_message_ts = time.time()   # живость — по любому сообщению
-            if not k or not k.get("x"):
-                return                       # бар ещё формируется
+            if not k:
+                return
             sym = d["s"]
+            # формирующийся бар: экстремумы текущей минуты (для протрузии)
+            self.forming[sym] = (Decimal(k["o"]), Decimal(k["h"]),
+                                 Decimal(k["l"]), Decimal(k["c"]))
+            if not k.get("x"):
+                return                       # бар ещё формируется
             bar = Bar(int(k["t"]), Decimal(k["o"]), Decimal(k["h"]),
                       Decimal(k["l"]), Decimal(k["c"]), True)
             if sym in self.hist:

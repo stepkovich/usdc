@@ -26,10 +26,15 @@ CREATE TABLE IF NOT EXISTS trades(
 
 
 class Ledger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, env: str = "demo"):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.env = env                    # DEMO/MAINNET: флаг в каждой записи
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(_SCHEMA)
+        try:                              # миграция старых баз
+            self._db.execute("ALTER TABLE fills ADD COLUMN env TEXT")
+        except sqlite3.OperationalError:
+            pass
         self._db.commit()
         self._lock = threading.Lock()
 
@@ -39,6 +44,7 @@ class Ledger:
             self._db.commit()
 
     def event(self, kind: str, symbol: str, payload: dict) -> None:
+        payload = {"env": self.env, **payload}
         self._exec("INSERT INTO events(ts,kind,symbol,payload) VALUES(?,?,?,?)",
                    (time.time(), kind, symbol, json.dumps(payload, default=str)))
 
@@ -46,10 +52,10 @@ class Ledger:
         """o — словарь ORDER_TRADE_UPDATE['o'] (алиасы биржи)."""
         self._exec(
             "INSERT INTO fills(ts,symbol,role,order_id,client_id,side,price,qty,"
-            "commission,realized_pnl) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "commission,realized_pnl,env) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (time.time() / 1000, symbol, role, str(o.get("i", "")), str(o.get("c", "")),
              str(o.get("S", "")), str(o.get("L", "") or o.get("ap", "")),
-             str(o.get("l", "")), str(o.get("n", "")), str(o.get("rp", ""))))
+             str(o.get("l", "")), str(o.get("n", "")), str(o.get("rp", "")), self.env))
 
     def trade_closed(self, symbol: str, side: str, entry_ts: float, exit_ts: float,
                      entry_px: Decimal, exit_px: Decimal, qty: Decimal,
