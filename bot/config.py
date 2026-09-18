@@ -42,6 +42,10 @@ MARKET_REST_URL = DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL
 
 
 def load_dotenv(path: Path) -> None:
+    """Файл .env обязателен только локально; в Docker переменные приходят
+    через env_file compose прямо в окружение — файла может не быть."""
+    if not path.exists():
+        return
     for line in path.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
