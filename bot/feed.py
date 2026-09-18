@@ -1,0 +1,177 @@
+"""Рыночный фид: минутные свечи с БОЕВЫХ стримов (публичные, ключи не нужны)
++ тёплый старт историей с боевого REST. Отдаёт события закрытия бара."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import deque
+from dataclasses import dataclass
+from decimal import Decimal
+
+from binance_common.configuration import ConfigurationRestAPI, ConfigurationWebSocketStreams
+from binance_common.constants import (
+    DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL,
+    WebsocketMode,
+)
+from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
+    DerivativesTradingUsdsFutures,
+)
+from binance_sdk_derivatives_trading_usds_futures.rest_api.models import (
+    KlineCandlestickDataIntervalEnum,
+)
+from binance_sdk_derivatives_trading_usds_futures.websocket_streams.models import (
+    KlineCandlestickStreamsIntervalEnum,
+)
+
+from bot.config import BotConfig
+
+log = logging.getLogger("feed")
+
+
+@dataclass
+class Bar:
+    open_time: int          # ms
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    closed: bool = False
+
+
+class SymbolHistory:
+    """Состояние одной пары: окно баров, ATR-фракция, Дончиан 8ч."""
+
+    def __init__(self, symbol: str, window: int):
+        self.symbol = symbol
+        self.window = window
+        self.bars: deque[Bar] = deque(maxlen=window)
+        self.tr_sum = Decimal(0)          # скользящая сумма True Range за окно
+        self.last_price = Decimal(0)
+        self.updated_at = 0.0
+
+    def _tr(self, prev_close: Decimal, bar: Bar) -> Decimal:
+        if prev_close == 0:
+            return bar.high - bar.low
+        return max(bar.high - bar.low,
+                   abs(bar.high - prev_close), abs(bar.low - prev_close))
+
+    def push_closed(self, bar: Bar) -> None:
+        prev_close = self.bars[-1].close if self.bars else Decimal(0)
+        tr = self._tr(prev_close, bar)
+        if len(self.bars) == self.window:
+            self.tr_sum -= self._tr(
+                self.bars[-2].close if len(self.bars) > 1 else Decimal(0), self.bars[-1])
+        self.bars.append(bar)
+        self.tr_sum += tr
+        self.last_price = bar.close
+        self.updated_at = time.time()
+
+    @property
+    def ready(self) -> bool:
+        return len(self.bars) >= self.window
+
+    @property
+    def atr_frac(self) -> Decimal:
+        """ATR(окно) как доля цены; если окно не полное — None."""
+        if not self.ready:
+            raise ValueError(f"{self.symbol}: история не прогрета")
+        return self.tr_sum / Decimal(self.window) / self.bars[-1].close
+
+    def donchian(self) -> tuple[Decimal, Decimal]:
+        """(max high, min low) за окно, исключая последний закрытый бар
+        (как в бэктесте: shift(1))."""
+        if not self.ready:
+            raise ValueError(f"{self.symbol}: история не прогрета")
+        b = list(self.bars)[:-1]
+        return (max(x.high for x in b), min(x.low for x in b))
+
+
+class MarketFeed:
+    def __init__(self, cfg: BotConfig):
+        self.cfg = cfg
+        self.hist: dict[str, SymbolHistory] = {}
+        self.market_rest = DerivativesTradingUsdsFutures(
+            config_rest_api=ConfigurationRestAPI(
+                api_key=cfg.api_key, api_secret=cfg.api_secret,
+                base_path="https://fapi.binance.com"))
+        self._streams_client: DerivativesTradingUsdsFutures | None = None
+        self._conn = None
+        self.last_message_ts = 0.0
+        self._queue: asyncio.Queue[tuple[str, Bar]] = asyncio.Queue(maxsize=10000)
+
+    # ---------- тёплый старт ----------
+    async def warmup(self, symbols: list[str]) -> None:
+        window = self.cfg.atr_window
+        need = max(self.cfg.warmup_bars, window + 10)
+        for chunk_start in range(0, len(symbols), 8):
+            chunk = symbols[chunk_start:chunk_start + 8]
+            results = await asyncio.gather(
+                *[asyncio.to_thread(self._fetch_klines, s, need) for s in chunk],
+                return_exceptions=True)
+            for s, res in zip(chunk, results):
+                if isinstance(res, Exception):
+                    log.error("warmup %s: %s", s, res)
+                    continue
+                self.hist[s] = res
+            await asyncio.sleep(0.5)
+        log.info("тёплый старт: %d/%d пар прогрето", len(self.hist), len(symbols))
+
+    def _fetch_klines(self, symbol: str, limit: int) -> SymbolHistory:
+        h = SymbolHistory(symbol, self.cfg.atr_window)
+        resp = self.market_rest.rest_api.kline_candlestick_data(
+            symbol=symbol,
+            interval=KlineCandlestickDataIntervalEnum["INTERVAL_1m"].value,
+            limit=limit)
+        rows = getattr(resp.data(), "root", None) or resp.data()
+        rows = list(rows)[:-1]                # последний бар ещё не закрыт
+        for r in rows:                        # [open_time, o, h, l, c, v, ...]
+            h.push_closed(Bar(int(r[0]), Decimal(str(r[1])), Decimal(str(r[2])),
+                              Decimal(str(r[3])), Decimal(str(r[4])), True))
+        return h
+
+    # ---------- живые стримы ----------
+    async def start_streams(self, symbols: list[str]) -> None:
+        # перезапуск: сначала честно закрыть старое соединение
+        if self._conn is not None:
+            try:
+                await self._conn.close_connection(close_session=True)
+            except Exception:                    # noqa: BLE001
+                pass
+            self._conn = None
+        self.last_message_ts = time.time()   # иначе watchdog ругается до первого бара
+        self._streams_client = DerivativesTradingUsdsFutures(
+            config_ws_streams=ConfigurationWebSocketStreams(
+                stream_url=self.cfg.market_streams_url,
+                mode=WebsocketMode.POOL, pool_size=4,
+                reconnect_attempts=10, reconnect_delay=5000))
+        self._conn = await self._streams_client.websocket_streams.create_connection()
+        # SDK принимает только одиночный символ в подписке — подписываем по одной
+        for s in symbols:
+            stream = await self._conn.kline_candlestick_streams(
+                symbol=s.lower(),
+                interval=KlineCandlestickStreamsIntervalEnum["INTERVAL_1m"].value)
+            stream.on("message", self._on_kline)
+        log.info("стримы подписаны: %d пар", len(symbols))
+
+    def _on_kline(self, model) -> None:
+        try:
+            d = model.model_dump(by_alias=True) if hasattr(model, "model_dump") else dict(model)
+            k = d.get("k") or {}
+            self.last_message_ts = time.time()   # живость — по любому сообщению
+            if not k or not k.get("x"):
+                return                       # бар ещё формируется
+            sym = d["s"]
+            bar = Bar(int(k["t"]), Decimal(k["o"]), Decimal(k["h"]),
+                      Decimal(k["l"]), Decimal(k["c"]), True)
+            if sym in self.hist:
+                self.hist[sym].push_closed(bar)
+                self._queue.put_nowait((sym, bar))
+        except Exception:                    # noqa: BLE001 — фид не должен падать
+            log.exception("kline parse error")
+
+    async def closed_bars(self) -> tuple[str, Bar]:
+        return await self._queue.get()
+
+    def stale(self, limit_s: float = 180) -> bool:
+        return time.time() - self.last_message_ts > limit_s

@@ -1,0 +1,20 @@
+[Unit]
+Description=Binance USDC scalper (demo pilot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iek
+WorkingDirectory=/home/iek/.zcode/workspace/default/scalp_research
+Environment=PYTHONPATH=/home/iek/.zcode/workspace/default/scalp_research:/home/iek/.zcode/workspace/default/scalp_research/pylibs
+ExecStart=/usr/bin/python3 -m bot.bot
+Restart=always
+RestartSec=10
+# мягкий стоп: бот завершается по SIGTERM, grpc-подключения закрывает сам
+TimeoutStopSec=30
+StandardOutput=append:/home/iek/.zcode/workspace/default/scalp_research/bot/systemd.log
+StandardError=append:/home/iek/.zcode/workspace/default/scalp_research/bot/systemd.log
+
+[Install]
+WantedBy=multi-user.target
