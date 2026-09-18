@@ -224,6 +224,38 @@ class Executor:
             log.warning("cancel_algo %s id=%s: %s", symbol, algo_id, e)
             return False
 
+    # ---------- дневной PnL по направлениям (биржа = источник правды) ----------
+    def daily_directional_pnl(self, start_ms: int) -> dict:
+        """Авторитетный дневной PnL по направлениям: income history (окно) +
+        userTrades по символам с ненулевым результатом (там есть side).
+        realizedPnl начисляется на ЗАКРЫВАЮЩЕЙ стороне:
+        SELL-заполнение закрыло лонг, BUY-заполнение закрыло шорт."""
+        income = unwrap(self.client.rest_api.get_income_history(
+            income_type="REALIZED_PNL", start_time=start_ms, limit=1000).data())
+        rows = getattr(income, "root", None) or income
+        by_symbol = {}
+        for r in rows:
+            d = r.model_dump(by_alias=True)
+            sym, inc = d.get("symbol", "?"), Decimal(str(d.get("income", "0")))
+            if inc != 0:
+                by_symbol[sym] = by_symbol.get(sym, Decimal(0)) + inc
+        out = {"LONG": Decimal(0), "SHORT": Decimal(0), "symbols": len(by_symbol)}
+        for sym in by_symbol:
+            try:
+                trades = unwrap(self.client.rest_api.account_trade_list(
+                    symbol=sym, start_time=start_ms, limit=1000).data())
+                trows = getattr(trades, "root", None) or trades
+                for t in trows:
+                    d = t.model_dump(by_alias=True) if hasattr(t, "model_dump") else t
+                    rp = Decimal(str(d.get("realizedPnl", "0")))
+                    if rp == 0:
+                        continue
+                    bucket = "LONG" if d.get("side") == "SELL" else "SHORT"
+                    out[bucket] += rp
+            except Exception as e:
+                log.warning("daily_directional_pnl %s: %s", sym, e)
+        return out
+
     # ---------- реконсиляция ----------
     def snapshot(self) -> dict:
         oo = unwrap(self.client.rest_api.current_all_open_orders().data())

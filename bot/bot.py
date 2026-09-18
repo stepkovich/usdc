@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 import sys
 import time
 from decimal import Decimal
@@ -53,6 +54,13 @@ class Bot:
         self._acc: dict[str, dict] = {}   # symbol -> {tp: id, stop: id}
         self.paused: set[str] = set()
         self.balance_snapshot: Decimal | None = None
+        # дневные счётчики PnL по направлениям (сброс при суточном снимке баланса)
+        self.daily_pnl: dict[str, Decimal] = {"LONG": Decimal(0), "SHORT": Decimal(0)}
+        self.daily_locked: dict[str, bool] = {"LONG": False, "SHORT": False}
+        self._day_key = datetime.now(timezone.utc).date()
+        self._day_start_ms = int(datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        self._pnl_check_counter = 0
         self._user_conn = None
         self._listen_key_task: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
@@ -113,6 +121,17 @@ class Bot:
                         if self.balance_snapshot is None:
                             log.warning("%s: снимок баланса не готов — сигнал пропущен",
                                         a.symbol)
+                            self.strategy.state(a.symbol).pending = None
+                            continue
+                        # направленный дневной лимит убытка
+                        if self.cfg.daily_loss_pct > 0 and \
+                                self.daily_locked.get(a.side.value):
+                            log.warning("%s: сигнал %s пропущен — дневной лимит %s "
+                                        "исчерпан (сегодня %s)", a.symbol,
+                                        a.side.value, self.cfg.daily_loss_pct * 100,
+                                        self.daily_pnl[a.side.value].quantize(Decimal("0.01")))
+                            self.ledger.event("daily_limit_skip", a.symbol,
+                                              {"side": a.side.value})
                             self.strategy.state(a.symbol).pending = None
                             continue
                         f = self.filters[a.symbol]
@@ -256,11 +275,64 @@ class Bot:
                         time.time(), acc.get("entry_px", Decimal(0)), exit_px,
                         acc.get("qty", Decimal(0)), exit_kind,
                         acc["fees"], acc["fees"] - acc["maker"], acc["pnl"])
+                    # дневные счётчики по направлениям + срабатывание лимита
+                    d_side = {"BUY": "LONG", "SELL": "SHORT"}.get(acc.get("side", "?"))
+                    if d_side:
+                        self.daily_pnl[d_side] += acc["pnl"]
+                        limit = self.balance_snapshot * self.cfg.daily_loss_pct
+                        if (self.cfg.daily_loss_pct > 0 and not self.daily_locked[d_side]
+                                and self.daily_pnl[d_side] <= -limit
+                                and self.balance_snapshot):
+                            self.daily_locked[d_side] = True
+                            self.ledger.event("daily_limit_hit", sym,
+                                              {"side": d_side,
+                                               "pnl": str(self.daily_pnl[d_side]),
+                                               "limit": str(limit)})
+                            log.warning("ДНЕВНОЙ ЛИМИТ %s: убыток %s <= -%s баланса — "
+                                        "новые входы %s приостановлены до суточного "
+                                        "сброса", d_side, self.daily_pnl[d_side].quantize(
+                                            Decimal("0.01")),
+                                        (self.cfg.daily_loss_pct * 100), d_side)
                     acts = self.strategy.exit_filled(sym, exit_kind)
                     await self.apply(acts)
             self.ledger.event("user_event", "", {"e": ev})
         except Exception:
             log.exception("user event error")
+
+    # ---------------- суточный цикл (граница 00:00 UTC) ----------------
+    def reset_daily(self) -> None:
+        """Новый торговый день: свежий снимок баланса, обнуление счётчиков,
+        новая граница дня (00:00 UTC — устойчива к рестартам процесса)."""
+        self._day_key = datetime.now(timezone.utc).date()
+        self._day_start_ms = int(datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        had = (self.daily_pnl["LONG"] or self.daily_pnl["SHORT"]
+               or self.daily_locked["LONG"] or self.daily_locked["SHORT"])
+        if had:
+            log.info("суточный сброс (00:00 UTC): счётчики обнулены "
+                     "(было: LONG %s, SHORT %s, блокировки %s/%s)",
+                     self.daily_pnl["LONG"].quantize(Decimal("0.01")),
+                     self.daily_pnl["SHORT"].quantize(Decimal("0.01")),
+                     self.daily_locked["LONG"], self.daily_locked["SHORT"])
+        self.daily_pnl = {"LONG": Decimal(0), "SHORT": Decimal(0)}
+        self.daily_locked = {"LONG": False, "SHORT": False}
+
+    def _refresh_locks(self) -> None:
+        """Пересчёт блокировок направленного дневного лимита по текущим цифрам."""
+        if not self.balance_snapshot or self.cfg.daily_loss_pct <= 0:
+            return
+        limit = self.balance_snapshot * self.cfg.daily_loss_pct
+        for side in ("LONG", "SHORT"):
+            want = self.daily_pnl[side] <= -limit
+            if want != self.daily_locked[side]:
+                self.daily_locked[side] = want
+                if want:
+                    self.ledger.event("daily_limit_hit", "",
+                                      {"side": side, "pnl": str(self.daily_pnl[side])})
+                log.warning("дневной лимит %s: %s (pnl %s, лимит -%s)",
+                            side, "ВКЛЮЧЁН" if want else "выключен",
+                            self.daily_pnl[side].quantize(Decimal("0.01")),
+                            limit.quantize(Decimal("0.01")))
 
     # ---------------- реконсиляция и базис ----------------
     async def reconciler(self) -> None:
@@ -322,6 +394,27 @@ class Bot:
                 if refresh_counter >= 360:   # фильтры биржи — раз в ~6ч
                     refresh_counter = 0
                     await self.refresh_filters()
+                # авторитетная сверка дневного PnL с биржей (первый цикл + ежечасно)
+                self._pnl_check_counter += 1
+                if self._pnl_check_counter % 5 == 1:
+                    auth = await asyncio.to_thread(
+                        self.exec.daily_directional_pnl, self._day_start_ms)
+                    dl = auth["LONG"] - self.daily_pnl["LONG"]
+                    ds = auth["SHORT"] - self.daily_pnl["SHORT"]
+                    if abs(dl) > Decimal("0.01") or abs(ds) > Decimal("0.01"):
+                        log.warning("коррекция дневного PnL по бирже: LONG %s->%s, "
+                                    "SHORT %s->%s",
+                                    self.daily_pnl["LONG"].quantize(Decimal("0.01")),
+                                    auth["LONG"].quantize(Decimal("0.01")),
+                                    self.daily_pnl["SHORT"].quantize(Decimal("0.01")),
+                                    auth["SHORT"].quantize(Decimal("0.01")))
+                        self.daily_pnl = {"LONG": auth["LONG"], "SHORT": auth["SHORT"]}
+                        self._refresh_locks()
+                    else:
+                        log.info("сверка дневного PnL с биржей: расхождений нет "
+                                 "(LONG %s, SHORT %s)",
+                                 self.daily_pnl["LONG"].quantize(Decimal("0.01")),
+                                 self.daily_pnl["SHORT"].quantize(Decimal("0.01")))
             except Exception:
                 log.exception("реконсиляция")
             await asyncio.sleep(60)
@@ -358,6 +451,41 @@ class Bot:
             if st.position:
                 st.position["stop_id"] = oid
 
+    def log_universe_state(self) -> None:
+        """П1: сколько пар торгуемо при текущем бюджете, минимум для юниверса."""
+        if not self.balance_snapshot or self.balance_snapshot <= 0:
+            return
+        budget = self.balance_snapshot * self.cfg.risk_pct
+        tradable, required = [], {}
+        for s in self.symbols:
+            h = self.feed.hist.get(s)
+            if not h or not h.ready:
+                continue
+            try:
+                stop = self.cfg.stop_atr_mult * h.atr_frac
+            except (ValueError, ArithmeticError):
+                continue
+            if stop <= 0:
+                continue
+            need = self.filters[s].min_notional * self.cfg.notional_buffer \
+                * stop / self.cfg.risk_pct
+            required[s] = need
+            if budget / stop >= self.filters[s].min_notional * self.cfg.notional_buffer:
+                tradable.append(s)
+        if not required:
+            return
+        min_sym = min(required, key=required.get)
+        min_need = required[min_sym].quantize(Decimal("1"))
+        if tradable:
+            log.info("юниверс: торгуемых %d/%d при балансе %s; минимум для полного "
+                     "юниверса %s USDC (на %s)", len(tradable), len(self.symbols),
+                     self.balance_snapshot.quantize(Decimal("1")), min_need, min_sym)
+        else:
+            log.warning("юниверс: НЕ ХВАТАЕТ НИ НА ЧТО — бюджет %s USDC меньше пола "
+                        "любой пары (минимум для входа: %s USDC на %s); бот ждёт "
+                        "пополнения или снижения стопов", budget.quantize(Decimal("0.01")),
+                        min_need, min_sym)
+
     async def refresh_filters(self) -> None:
         probe = DerivativesTradingUsdsFutures(config_rest_api=ConfigurationRestAPI(
             api_key=self.cfg.api_key, api_secret=self.cfg.api_secret,
@@ -371,17 +499,18 @@ class Bot:
 
     # ---------------- watchdog ----------------
     async def watchdog(self) -> None:
-        bal_ts = time.time()
         while not self._stop.is_set():
             await asyncio.sleep(30)
-            if time.time() - bal_ts >= 86400:     # снимок баланса раз в сутки
+            if datetime.now(timezone.utc).date() != self._day_key:
+                # новый торговый день (00:00 UTC): свежий баланс + сброс счётчиков
                 try:
+                    await self.reset_daily()
                     self.balance_snapshot = await asyncio.to_thread(
                         self.exec.account_wallet_balance, "USDC")
                     log.info("снимок баланса обновлён: %s USDC", self.balance_snapshot)
-                    bal_ts = time.time()
+                    self.log_universe_state()
                 except Exception:
-                    log.exception("обновление снимка баланса")
+                    log.exception("суточный сброс")
             if self.feed.stale(180):
                 log.error("фид молчит >180с — переподключение стримов")
                 try:
@@ -393,6 +522,7 @@ class Bot:
     async def run(self) -> None:
         await self.setup()
         await self.feed.warmup(self.symbols)
+        self.log_universe_state()
         await self.feed.start_streams(self.symbols)
         await self.start_user_stream()
         self._tasks = [asyncio.create_task(self.reconciler()),

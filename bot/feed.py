@@ -74,9 +74,12 @@ class SymbolHistory:
 
     @property
     def atr_frac(self) -> Decimal:
-        """ATR(окно) как доля цены; если окно не полное — None."""
+        """ATR(окно) как доля цены; вырожденные данные -> ValueError."""
         if not self.ready:
             raise ValueError(f"{self.symbol}: история не прогрета")
+        if self.tr_sum == 0 or self.bars[-1].close == 0:
+            # замороженный/неликвидный контракт: нулевой диапазон всех баров
+            raise ValueError(f"{self.symbol}: нулевой ATR (контракт заморожен?)")
         return self.tr_sum / Decimal(self.window) / self.bars[-1].close
 
     def donchian(self) -> tuple[Decimal, Decimal]:
