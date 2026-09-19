@@ -46,11 +46,17 @@ def main() -> None:
     # 2) доля тейкерских входов: по счёту, по ОБЪЁМУ, по квартилям волатильности
     e_all = [r for r in e_recs]
     if e_all:
-        tv = sum(r["n"] for r in e_all if r["rate"] > 4)
-        av = sum(r["n"] for r in e_all)
-        print(f"KPI тейкерские входы: по счёту {len([r for r in e_all if r['rate']>4])}/"
-              f"{len(e_all)} ({len([r for r in e_all if r['rate']>4])/len(e_all)*100:.0f}%), "
-              f"по ОБЪЁМУ {tv/av*100:.0f}%  [mainnet-порог: <=10% зелёный, 10-25 жёлтый, >25 красный]")
+        # фактическая комиссия входа на объём (без классификации) — основной KPI
+        ef = sum(r["rate"]/10000*r["n"] for r in e_all)
+        ev = sum(r["n"] for r in e_all)
+        ebp = ef/ev*10000
+        zone = ("зелёный" if ebp <= 0.5 else "жёлтый" if ebp <= 1.1 else "красный")
+        print(f"KPI фактическая комиссия входа: {ebp:.2f} бп на объём "
+              f"[mainnet-порог: <=0.5 зелёный, 0.5-1.1 жёлтый, >1.1 красный] "
+              f"— сейчас {zone} (демо-калибровка)")
+        tcount = len([r for r in e_all if r["rate"] > 4])
+        print(f"  разрез: тейкерских по счёту {tcount}/{len(e_all)} "
+              f"({tcount/len(e_all)*100:.0f}%), серых {len([r for r in e_all if 3 < r['rate'] <= 4])}")
     sig = db.execute("SELECT symbol, payload FROM events WHERE kind='signal_entry'").fetchall()
     sym_vol = {}
     for s, pl in sig:
@@ -101,6 +107,25 @@ def main() -> None:
                 print(f"{tag}: замеров пока нет")
     n_fills = db.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
     print(f"(источник: журнал, накопительно с 17.09 через рестарты; {n_fills} исполнений)")
+
+    # 3) доля TP с первого касания (мост линейка <-> модель)
+    tp_all = tp["demo"] + tp["mainnet"]
+    if tp_all:
+        ft = sum(1 for d in tp_all if d <= 1)
+        print(f"KPI доля TP с первого касания: {ft}/{len(tp_all)} = {ft/len(tp_all)*100:.0f}% "
+              f"(модель предполагает 100% при протрузии порога)")
+    # 4) фандинг за 24ч
+    try:
+        cfg = BotConfig.from_env(Path(__file__).resolve().parent.parent)
+        ex = Executor(cfg, {})
+        start = int(time.time() * 1000) - 24 * 3600 * 1000
+        fund = unwrap(ex.client.rest_api.get_income_history(
+            income_type="FUNDING_FEE", start_time=start, limit=1000).data())
+        frows = getattr(fund, "root", None) or fund
+        ftot = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0) for r in frows)
+        print(f"KPI фандинг-24ч: {ftot:+.2f} USDC")
+    except Exception as e:
+        print(f"KPI фандинг-24ч: недоступно ({e})")
 
     # 3) слиппедж стопов: триггер (событие) -> цена исполнения (fill role S)
     slips = []

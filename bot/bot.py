@@ -309,7 +309,14 @@ class Bot:
                 acc["orders"][oid] = rp
                 comm = Decimal(str(o.get("n") or "0"))
                 acc["fees"] += comm
-                if role in ("E", "T"):            # мейкерские исполнения
+                # возврат по СТАВКЕ: мейкер (<=3 бп) -> промо обнулит; тейкер остаётся
+                try:
+                    _px = Decimal(str(o.get("ap") or o.get("L") or "0"))
+                    _qt = Decimal(str(o.get("l") or o.get("z") or "0"))
+                    _rate_bp = (comm / (_px * _qt) * 10000) if _px * _qt > 0 else Decimal(0)
+                except Exception:
+                    _rate_bp = Decimal(0)
+                if role in ("E", "T") and _rate_bp <= 3:
                     acc["maker"] += comm
                 if role == "E" and status == "FILLED":
                     qty = Decimal(o.get("z") or "0")
