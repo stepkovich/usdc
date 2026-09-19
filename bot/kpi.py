@@ -75,18 +75,27 @@ def main() -> None:
         print(f"  {qb:<14} {len(rs):>4} входов, тейкеры в ОБЪЁМЕ {tv/av*100:4.0f}%")
 
     # 2) протрузии (глубина прохода цены сквозь уровень) — по средам раздельно
+    # дедупликация: частичные заполнения одной заявки в одну минуту дают
+    # один бар -> одинаковые замеры; считаем уникальные (символ, минута, глубина)
     tp = {"demo": [], "mainnet": []}
     en = {"demo": [], "mainnet": []}
-    for sym, payload in db.execute("SELECT symbol, payload FROM events WHERE kind='fill_protrusion'"):
+    seen = set(); dup = 0
+    for sym, ts, payload in db.execute("SELECT symbol, ts, payload FROM events WHERE kind='fill_protrusion'"):
         d = json.loads(payload)
         env = d.get("env", "demo")
+        key = (sym, int(float(ts) // 60), round(d["depth_bp"], 1))
+        if key in seen:
+            dup += 1
+            continue
+        seen.add(key)
         (tp if d["kind"] == "tp" else en).setdefault(env, []).append(d["depth_bp"])
     for env in ("demo", "mainnet"):
         for name, arr in [("тейков", tp[env]), ("входов", en[env])]:
             tag = f"[{env}] KPI протрузия {name}"
             if arr:
                 arr.sort()
-                print(f"{tag}: n={len(arr)}, медиана {arr[len(arr)//2]:.1f} бп, "
+                print(f"{tag}: n={len(arr)} (дедуплицировано {dup} частичных дубликатов), "
+                      f"медиана {arr[len(arr)//2]:.1f} бп, "
                       f"90-й перц {arr[int(len(arr)*0.9)]:.1f} бп")
             else:
                 print(f"{tag}: замеров пока нет")
