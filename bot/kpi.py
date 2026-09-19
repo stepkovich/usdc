@@ -40,6 +40,12 @@ def main() -> None:
               f"комиссии {fees:>7.2f} | ставка: медиана {np.median(rates):.2f} бп, "
               f"по объёму {fees/notional*10000:.2f} бп")
     e_recs = [r for r in recs if r["role"] == "E"]
+    # дом для числа, начавшего всю историю канала: доля тейкеров в объёме входов
+    if e_recs:
+        tk_vol = sum(r["n"] for r in e_recs if r["rate"] > 4)
+        all_vol = sum(r["n"] for r in e_recs)
+        print(f"KPI доля тейкеров в ОБЪЁМЕ входов: {tk_vol/all_vol*100:.0f}% "
+              f"[mainnet-порог: <=10 зелёный, 10-25 жёлтый, >25 красный]")
     block("вход-мейкер", [r for r in e_recs if r["rate"] <= 3])
     block("вход-тейкер", [r for r in e_recs if r["rate"] > 4])
     block("вход-серые", [r for r in e_recs if 3 < r["rate"] <= 4])
@@ -176,26 +182,27 @@ def main() -> None:
     except Exception as e:
         print(f"KPI фандинг-24ч: недоступно ({e})")
 
-    # 3) слиппедж стопов: триггер (событие) -> цена исполнения (fill role S)
+    # 3) слиппедж стопов: триггер (stop_placed) -> цена исполнения (fills role S)
     slips = []
-    last_trigger = {}
-    for ts, kind, sym, payload in db.execute(
-            "SELECT ts, kind, symbol, payload FROM events "
-            "WHERE kind IN ('stop_placed','fill_stop') ORDER BY ts"):
-        if kind == "stop_placed":
-            try:
-                last_trigger[sym] = float(json.loads(payload)["price"])
-            except Exception:
-                pass
-        else:
-            trig = last_trigger.get(sym)
-            if trig:
-                try:
-                    fill = float(json.loads(payload).get("price", 0) or 0)
-                    if fill:
-                        slips.append((fill/trig - 1) * 10000)
-                except Exception:
-                    pass
+    # каждая закрытая стопом сделка: триггер из stop_placed, факт из fills role S
+    for sym, eid, exit_px in db.execute(
+            "SELECT symbol, id, exit_px FROM trades WHERE exit_kind='stop'"):
+        try:
+            trig_row = db.execute(
+                "SELECT payload FROM events WHERE kind='stop_placed' AND symbol=? "
+                "ORDER BY ts DESC LIMIT 1", (sym,)).fetchone()
+            if not trig_row:
+                continue
+            trig_px = float(json.loads(trig_row[0])["price"])
+            fill_row = db.execute(
+                "SELECT price FROM fills WHERE symbol=? AND role='S' "
+                "AND CAST(qty AS REAL)>0 ORDER BY ts DESC LIMIT 1", (sym,)).fetchone()
+            if not fill_row:
+                continue
+            fill_px = float(fill_row[0])
+            slips.append((fill_px/trig_px - 1) * 10000)
+        except Exception:
+            pass
     if slips:
         slips.sort()
         print(f"KPI слиппедж стопов: n={len(slips)}, медиана {slips[len(slips)//2]:+.1f} бп, "
