@@ -31,7 +31,7 @@ class Ledger:
         self.env = env                    # DEMO/MAINNET: флаг в каждой записи
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(_SCHEMA)
-        for col in ("env TEXT", "c_asset TEXT"):
+        for col in ("env TEXT", "c_asset TEXT", "z_qty TEXT"):
             try:                          # миграция старых баз
                 self._db.execute(f"ALTER TABLE fills ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -53,11 +53,11 @@ class Ledger:
         """o — словарь ORDER_TRADE_UPDATE['o'] (алиасы биржи)."""
         self._exec(
             "INSERT INTO fills(ts,symbol,role,order_id,client_id,side,price,qty,"
-            "commission,realized_pnl,env,c_asset) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "commission,realized_pnl,env,c_asset,z_qty) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (time.time() / 1000, symbol, role, str(o.get("i", "")), str(o.get("c", "")),
              str(o.get("S", "")), str(o.get("L", "") or o.get("ap", "")),
              str(o.get("l", "")), str(o.get("n", "")), str(o.get("rp", "")), self.env,
-             str(o.get("N", ""))))
+             str(o.get("N", "")), str(o.get("z", ""))))
 
     def trade_closed(self, symbol: str, side: str, entry_ts: float, exit_ts: float,
                      entry_px: Decimal, exit_px: Decimal, qty: Decimal,

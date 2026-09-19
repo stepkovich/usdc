@@ -176,10 +176,24 @@ class Bot:
                         if book and book[0] > 0:
                             mid = (book[0] + book[1]) / 2
                             spread_bp = float((book[1] - book[0]) / mid * 10000)
+                        # квартиль волатильности ЗАМОРАЖИВАЕТСЯ в момент сделки
+                        # (пары мигрируют между квартилями при пересчёте)
+                        vol_q = None
+                        try:
+                            import bisect
+                            stops = sorted(self.cfg.stop_atr_mult *
+                                           self.feed.hist[s].atr_frac
+                                           for s in self.symbols
+                                           if s in self.feed.hist and self.feed.hist[s].ready
+                                           and self.feed.hist[s].atr_frac > 0)
+                            my = self.cfg.stop_atr_mult * a.atr0
+                            vol_q = 1 + bisect.bisect_left(stops, my)
+                        except Exception:
+                            pass
                         self.ledger.event("signal_entry", a.symbol, {
                             "side": a.side.value, "price": str(price),
                             "qty": str(qty), "atr0": str(a.atr0), "cid": a.client_id,
-                            "spread_bp": spread_bp})
+                            "spread_bp": spread_bp, "vol_quartile": vol_q})
                         if self.cfg.dry_run:
                             log.info("[DRY] вход %s %s %s @%s", a.symbol,
                                      a.side.value, qty, price)
