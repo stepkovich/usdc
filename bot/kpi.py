@@ -19,7 +19,10 @@ def main() -> None:
 
     # 1) КАНОНИЧЕСКАЯ таблица комиссий: вход-мейкер / вход-тейкер / тейк / стоп
     import numpy as np
+    n_manual = db.execute("SELECT COUNT(*) FROM fills WHERE role='?'").fetchone()[0]
     print("KPI тариф — каноническая таблица (окно: накопительно с 17.09; источник: fills):")
+    print(f"KPI юниверс: только scr-* исполнения (бот); ручных (role='?') в таблице "
+          f"{n_manual} — в KPI не входят")
     rows = db.execute(
         "SELECT role, symbol, price, qty, commission FROM fills WHERE CAST(price AS REAL)>0 "
         "AND CAST(commission AS REAL)>0").fetchall()
@@ -114,6 +117,23 @@ def main() -> None:
         ft = sum(1 for d in tp_all if d <= 1)
         print(f"KPI доля TP с первого касания: {ft}/{len(tp_all)} = {ft/len(tp_all)*100:.0f}% "
               f"(модель предполагает 100% при протрузии порога)")
+    # 2b) последний час из income (класс «незакрываемых часов»)
+    try:
+        cfg = BotConfig.from_env(Path(__file__).resolve().parent.parent)
+        ex = Executor(cfg, {})
+        start = int(time.time() * 1000) - 3600 * 1000
+        rp = unwrap(ex.client.rest_api.get_income_history(
+            income_type="REALIZED_PNL", start_time=start, limit=1000).data())
+        rrows = getattr(rp, "root", None) or rp
+        recs = [r.model_dump(by_alias=True) for r in rrows]
+        usdc = [float(d.get("income", 0) or 0) for d in recs
+                if d.get("symbol", "").endswith("USDC")]
+        print(f"KPI последний час (income, USDC-пары бота): {len(usdc)} исполнений, "
+              f"сумма {sum(usdc):+.2f} USDC, "
+              f"в плюс {sum(1 for x in usdc if x > 0)}/{len(usdc)}")
+    except Exception as e:
+        print(f"KPI последний час: недоступно ({e})")
+
     # 3b) операнды тарифа за 24ч: PnL(биржа, income) + возврат(мейкерские <=3 бп fills)
     try:
         cfg = BotConfig.from_env(Path(__file__).resolve().parent.parent)
