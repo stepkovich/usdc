@@ -114,6 +114,35 @@ def main() -> None:
         ft = sum(1 for d in tp_all if d <= 1)
         print(f"KPI доля TP с первого касания: {ft}/{len(tp_all)} = {ft/len(tp_all)*100:.0f}% "
               f"(модель предполагает 100% при протрузии порога)")
+    # 3b) операнды тарифа за 24ч: PnL(биржа, income) + возврат(мейкерские <=3 бп fills)
+    try:
+        cfg = BotConfig.from_env(Path(__file__).resolve().parent.parent)
+        ex = Executor(cfg, {})
+        start = int(time.time() * 1000) - 24 * 3600 * 1000
+        rp = unwrap(ex.client.rest_api.get_income_history(
+            income_type="REALIZED_PNL", start_time=start, limit=1000).data())
+        rrows = getattr(rp, "root", None) or rp
+        pnl24 = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0) for r in rrows)
+        day_ago = time.time() - 24 * 3600
+        refund = sum(float(c or 0) for ts2, r2, c in db.execute(
+            "SELECT ts*1000, role, commission FROM fills WHERE role IN ('E','T') "
+            "AND CAST(commission AS REAL)>0") if ts2 * 1000 > start and
+            (float(c) / max(float(r2) * 1, 1e-12)) <= 3) if False else None
+        # возврат считаем по ставке из таблицы: комиссия/нотионал <= 3 бп
+        refund = 0.0
+        for ts2, p2, q2, c2 in db.execute(
+                "SELECT ts*1000, price, qty, commission FROM fills WHERE role IN ('E','T') "
+                "AND CAST(commission AS REAL)>0 AND CAST(price AS REAL)>0"):
+            if ts2 * 1000 > start:
+                rate_bp = float(c2 or 0) / (float(p2) * float(q2)) * 10000
+                if rate_bp <= 3:
+                    refund += float(c2 or 0)
+        print(f"KPI тариф-24ч (операнды): PnL биржи {pnl24:+.2f} + возврат мейкерских "
+              f"{refund:+.2f} = тариф {pnl24 + refund:+.2f} USDC "
+              f"(источники: income history + fills, окно 24ч)")
+    except Exception as e:
+        print(f"KPI тариф-24ч: недоступно ({e})")
+
     # 4) фандинг за 24ч
     try:
         cfg = BotConfig.from_env(Path(__file__).resolve().parent.parent)

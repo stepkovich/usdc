@@ -40,6 +40,14 @@ log = logging.getLogger("bot")
 
 class Bot:
     def __init__(self, cfg: BotConfig):
+        # эксклюзивный лок журнала: второй экземпляр бота не сможет стартовать
+        # (второй писец в journal.db = причина дрейфа учёта)
+        import fcntl
+        self._lock_file = open(ROOT / "bot" / "bot.lock", "w")
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit("второй экземпляр бота уже работает (лок journal.db) — отказ от старта")
         self.cfg = cfg
         import os
         journal_path = Path(os.environ.get("BOT_JOURNAL_PATH",

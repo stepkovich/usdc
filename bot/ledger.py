@@ -36,6 +36,23 @@ class Ledger:
                 self._db.execute(f"ALTER TABLE fills ADD COLUMN {col}")
             except sqlite3.OperationalError:
                 pass
+        # аудит: любая мутация trades записывает себя (дневник не переписывает
+        # прошлое молча — следующая мутация оставит след с временем)
+        self._db.executescript("""
+CREATE TRIGGER IF NOT EXISTS trades_audit_update AFTER UPDATE ON trades
+BEGIN
+  INSERT INTO events(ts, kind, symbol, payload)
+  VALUES(strftime('%s','now'), 'trade_row_updated', NEW.symbol,
+         json_object('id', NEW.id, 'old_pnl', OLD.pnl_exchange,
+                     'new_pnl', NEW.pnl_exchange));
+END;
+CREATE TRIGGER IF NOT EXISTS trades_audit_delete AFTER DELETE ON trades
+BEGIN
+  INSERT INTO events(ts, kind, symbol, payload)
+  VALUES(strftime('%s','now'), 'trade_row_deleted', OLD.symbol,
+         json_object('id', OLD.id, 'pnl_was', OLD.pnl_exchange));
+END;
+""")
         self._db.commit()
         self._lock = threading.Lock()
 
