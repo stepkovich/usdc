@@ -649,8 +649,8 @@ def main() -> None:
     tg_token = os.environ.get("TELEGRAM_TOKEN", "")
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
     if tg_token and tg_chat:
-        tg.init(tg_token, tg_chat)
-        tg.fire("🤖 Бот запускается...")
+        tg.init(tg_token, tg_chat, env=cfg.mode.value)
+        tg.fire(f"🤖 Бот запускается... среда: {cfg.mode.value.upper()}")
     log_path = Path(os.environ.get("BOT_LOG_PATH", ROOT / "bot" / "bot.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(

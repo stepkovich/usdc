@@ -10,13 +10,15 @@ log = logging.getLogger("telegram")
 
 TOKEN = None
 CHAT_ID = None
+ENV = "demo"
 
 
-def init(token: str, chat_id: str) -> None:
-    global TOKEN, CHAT_ID
+def init(token: str, chat_id: str, env: str = "demo") -> None:
+    global TOKEN, CHAT_ID, ENV
     TOKEN = token
     CHAT_ID = chat_id
-    log.info("telegram: токен и chat_id установлены")
+    ENV = env.upper()
+    log.info("telegram: токен и chat_id установлены, среда %s", ENV)
 
 
 async def send(text: str) -> None:
@@ -37,6 +39,10 @@ async def send(text: str) -> None:
         log.debug("telegram send error (не критично): %s", e)
 
 
+def _prefix() -> str:
+    return f"[{ENV}] "
+
+
 def fire(text: str) -> None:
     """Fire-and-forget: вызвать из sync/async контекста, не ждёт ответа."""
     try:
@@ -53,24 +59,24 @@ def fire(text: str) -> None:
 
 def notify_entry(symbol: str, side: str, size: float, price: str) -> None:
     emoji = "🟢" if side == "LONG" else "🔴"
-    fire(f"{emoji} <b>ВХОД {symbol} {side}</b>\n"
+    fire(f"{_prefix()}{emoji} <b>ВХОД {symbol} {side}</b>\n"
          f"Размер: {size:.2f} USDC @ {price}")
 
 
 def notify_tp(symbol: str, pnl: float, dur_h: float) -> None:
-    fire(f"✅ <b>TP {symbol}</b> +{pnl:.2f} USDC\n"
+    fire(f"{_prefix()}✅ <b>TP {symbol}</b> +{pnl:.2f} USDC\n"
          f"Время в позиции: {dur_h:.1f} ч")
 
 
 def notify_stop(symbol: str, pnl: float, dur_h: float) -> None:
-    fire(f"🔴 <b>СТОП {symbol}</b> {pnl:.2f} USDC\n"
+    fire(f"{_prefix()}🔴 <b>СТОП {symbol}</b> {pnl:.2f} USDC\n"
          f"Время в позиции: {dur_h:.1f} ч")
 
 
 def notify_daily(n: int, wins: int, pnl: float) -> None:
-    fire(f"📊 <b>Итог дня</b>: {n} сделок, {wins} в плюс, "
+    fire(f"{_prefix()}📊 <b>Итог дня</b>: {n} сделок, {wins} в плюс, "
          f"PnL {pnl:+.2f} USDC")
 
 
 def notify_error(text: str) -> None:
-    fire(f"⚠️ {text}")
+    fire(f"{_prefix()}⚠️ {text}")
