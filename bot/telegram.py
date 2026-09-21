@@ -42,12 +42,10 @@ async def send(text: str) -> None:
         log.warning("telegram send error: %s", e)
 
 
-def _prefix() -> str:
-    return f"[{ENV}] "
-
-
 def fire(text: str) -> None:
-    """Fire-and-forget: вызвать из sync/async контекста, не ждёт ответа."""
+    """Fire-and-forget: вызвать из sync/async контекста, не ждёт ответа.
+    Префикс среды добавляется автоматически к КАЖДОМУ сообщению."""
+    text = f"[{ENV}] {text}"
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -62,24 +60,24 @@ def fire(text: str) -> None:
 
 def notify_entry(symbol: str, side: str, size: float, price: str) -> None:
     emoji = "🟢" if side == "LONG" else "🔴"
-    fire(f"{_prefix()}{emoji} <b>ВХОД {symbol} {side}</b>\n"
+    fire(f"{emoji} <b>ВХОД {symbol} {side}</b>\n"
          f"Размер: {size:.2f} USDC @ {price}")
 
 
 def notify_tp(symbol: str, pnl: float, dur_h: float) -> None:
-    fire(f"{_prefix()}✅ <b>TP {symbol}</b> +{pnl:.2f} USDC\n"
+    fire(f"✅ <b>TP {symbol}</b> +{pnl:.2f} USDC\n"
          f"Время в позиции: {dur_h:.1f} ч")
 
 
 def notify_stop(symbol: str, pnl: float, dur_h: float) -> None:
-    fire(f"{_prefix()}🔴 <b>СТОП {symbol}</b> {pnl:.2f} USDC\n"
+    fire(f"🔴 <b>СТОП {symbol}</b> {pnl:.2f} USDC\n"
          f"Время в позиции: {dur_h:.1f} ч")
 
 
 def notify_daily(n: int, wins: int, pnl: float) -> None:
-    fire(f"{_prefix()}📊 <b>Итог дня</b>: {n} сделок, {wins} в плюс, "
+    fire(f"📊 <b>Итог дня</b>: {n} сделок, {wins} в плюс, "
          f"PnL {pnl:+.2f} USDC")
 
 
 def notify_error(text: str) -> None:
-    fire(f"{_prefix()}⚠️ {text}")
+    fire(f"⚠️ {text}")
