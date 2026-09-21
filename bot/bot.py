@@ -23,6 +23,7 @@ from bot.feed import MarketFeed
 from bot.ledger import Ledger
 from bot.markets import parse_filters
 from bot.user_stream import RawUserStream
+import bot.telegram as tg
 from bot.strategy import (
     CancelEntry,
     CancelExit,
@@ -206,6 +207,9 @@ class Bot:
                             log.info("[DRY] вход %s %s %s @%s", a.symbol,
                                      a.side.value, qty, price)
                             continue
+                        tg.fire(f"{'🟢' if a.side.value == 'LONG' else '🔴'} "
+                                f"<b>ВХОД {a.symbol} {a.side.value}</b>\n"
+                                f"{size:.2f} USDC @ {price}")
                         oid = await asyncio.to_thread(
                             self.exec.place_entry_limit, a.symbol,
                             "BUY" if a.side.value == "LONG" else "SELL", price, qty,
@@ -375,6 +379,12 @@ class Bot:
                                         "сброса", d_side, self.daily_pnl[d_side].quantize(
                                             Decimal("0.01")),
                                         (self.cfg.daily_loss_pct * 100), d_side)
+                    exit_pnl = float(acc.get("pnl", 0))
+                    dur_h = (time.time() - acc.get("entry_ts", time.time())) / 3600
+                    if exit_kind == "tp":
+                        tg.fire(f"✅ <b>TP {sym}</b> {exit_pnl:+.2f} USDC ({dur_h:.1f} ч)")
+                    else:
+                        tg.fire(f"🔴 <b>СТОП {sym}</b> {exit_pnl:+.2f} USDC ({dur_h:.1f} ч)")
                     acts = self.strategy.exit_filled(sym, exit_kind)
                     await self.apply(acts)
             self.ledger.event("user_event", "", {"e": ev})
@@ -636,6 +646,11 @@ class Bot:
 
 def main() -> None:
     import os
+    tg_token = os.environ.get("TELEGRAM_TOKEN", "")
+    tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if tg_token and tg_chat:
+        tg.init(tg_token, tg_chat)
+        tg.fire("🤖 Бот запускается...")
     log_path = Path(os.environ.get("BOT_LOG_PATH", ROOT / "bot" / "bot.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
