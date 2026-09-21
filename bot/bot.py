@@ -524,10 +524,12 @@ class Bot:
         entry = st.position["entry"] if st.position else avg
         tp_px = f.round_price(entry * (1 + self.cfg.target_pct) if side == "LONG"
                               else entry * (1 - self.cfg.target_pct))
+        pos_side = side  # сторона ПОЗИЦИИ (LONG/SHORT)
         if not any(str(o.get("clientOrderId", "")).startswith("scr-T") for o in orders):
             log.warning("%s: TP отсутствует — ставлю @%s", sym, tp_px)
             oid = await asyncio.to_thread(self.exec.place_tp_limit, sym, exit_side,
-                                          tp_px, abs(qty), f"scr-T-{sym}-repair")
+                                          tp_px, abs(qty), f"scr-T-{sym}-repair",
+                                          pos_side=pos_side)
             self.exits.setdefault(sym, {})["tp"] = oid
             if st.position:
                 st.position["tp_id"] = oid
@@ -541,6 +543,8 @@ class Bot:
             log.warning("%s: стоп отсутствует — ставлю @%s", sym, stop_px)
             oid = await asyncio.to_thread(self.exec.place_stop_market, sym, exit_side,
                                           stop_px, f"scr-S-{sym}-repair")
+            # HEDGE mode: stop для LONG-позиции закрывается SELL, positionSide=LONG
+            # stop_market передаёт side ордера, positionSide выводится из него
             self.exits.setdefault(sym, {})["stop"] = oid
             if st.position:
                 st.position["stop_id"] = oid

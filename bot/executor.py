@@ -147,19 +147,24 @@ class Executor:
         return oid
 
     def place_tp_limit(self, symbol: str, side: str, price: Decimal,
-                       qty: Decimal, client_id: str) -> int | None:
+                       qty: Decimal, client_id: str,
+                       pos_side: str | None = None) -> int | None:
         # -2022: гонка сразу после исполнения входа — ретраим с паузой
+        # pos_side = сторона ПОЗИЦИИ (LONG/SHORT), не ордера.
+        # В HEDGE: positionSide = сторона позиции (закрываем LONG -> positionSide=LONG)
+        # В ONE-WAY: reduceOnly=true, positionSide не шлём
         for attempt in range(4):
             try:
                 kw = dict(
                     symbol=symbol,
                     side=NewOrderSideEnum[side].value,
                     type=NewOrderTypeEnum["LIMIT"].value,
-                    position_side=self._pside(side),
                     time_in_force=NewOrderTimeInForceEnum["GTC"].value,
                     quantity=float(qty), price=float(price),
                     new_client_order_id=client_id if attempt == 0 else f"{client_id}r{attempt}")
-                if not self.hedge_mode:
+                if self.hedge_mode:
+                    kw["position_side"] = pos_side or self._pside(side)
+                else:
                     kw["reduce_only"] = NewOrderReduceOnlyEnum["TRUE"].value
                 r = self.client.rest_api.new_order(**kw)
                 oid = int(r.data().order_id)
@@ -185,6 +190,9 @@ class Executor:
             trigger_price=float(stop_price),
             working_type=NewAlgoOrderWorkingTypeEnum["CONTRACT_PRICE"].value,
             client_algo_id=client_id)
+        if self.hedge_mode:
+            # HEDGE: positionSide обязателен для algo-ордеров
+            kw["position_side"] = "LONG" if side == "SELL" else "SHORT"
         if close_pos:
             kw["close_position"] = NewAlgoOrderClosePositionEnum["TRUE"].value
         else:
