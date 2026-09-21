@@ -151,15 +151,17 @@ class Executor:
         # -2022: гонка сразу после исполнения входа — ретраим с паузой
         for attempt in range(4):
             try:
-                r = self.client.rest_api.new_order(
+                kw = dict(
                     symbol=symbol,
                     side=NewOrderSideEnum[side].value,
                     type=NewOrderTypeEnum["LIMIT"].value,
                     position_side=self._pside(side),
                     time_in_force=NewOrderTimeInForceEnum["GTC"].value,
                     quantity=float(qty), price=float(price),
-                    reduce_only=NewOrderReduceOnlyEnum["TRUE"].value,
                     new_client_order_id=client_id if attempt == 0 else f"{client_id}r{attempt}")
+                if not self.hedge_mode:
+                    kw["reduce_only"] = NewOrderReduceOnlyEnum["TRUE"].value
+                r = self.client.rest_api.new_order(**kw)
                 oid = int(r.data().order_id)
                 break
             except BinanceError as e:
