@@ -24,6 +24,7 @@ def init(token: str, chat_id: str, env: str = "demo") -> None:
 async def send(text: str) -> None:
     """Отправить сообщение. Фоновая задача — не блокирует торговлю."""
     if not TOKEN or not CHAT_ID:
+        log.warning("telegram: TOKEN или CHAT_ID не установлены — пропускаю")
         return
     try:
         async with aiohttp.ClientSession() as s:
@@ -35,8 +36,10 @@ async def send(text: str) -> None:
                 res = await r.json()
                 if not res.get("ok"):
                     log.warning("telegram send failed: %s", res)
+                else:
+                    log.info("telegram: отправлено (%d символов)", len(text))
     except Exception as e:
-        log.debug("telegram send error (не критично): %s", e)
+        log.warning("telegram send error: %s", e)
 
 
 def _prefix() -> str:

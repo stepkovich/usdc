@@ -646,11 +646,6 @@ class Bot:
 
 def main() -> None:
     import os
-    tg_token = os.environ.get("TELEGRAM_TOKEN", "")
-    tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if tg_token and tg_chat:
-        tg.init(tg_token, tg_chat, env=cfg.mode.value)
-        tg.fire(f"🤖 Бот запускается... среда: {cfg.mode.value.upper()}")
     log_path = Path(os.environ.get("BOT_LOG_PATH", ROOT / "bot" / "bot.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -659,6 +654,12 @@ def main() -> None:
         handlers=[logging.StreamHandler(),
                   logging.FileHandler(log_path)])
     cfg = BotConfig.from_env(ROOT)
+    # Telegram инициализируется ПОСЛЕ загрузки .env (нужен cfg.mode)
+    tg_token = os.environ.get("TELEGRAM_TOKEN", "")
+    tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if tg_token and tg_chat:
+        tg.init(tg_token, tg_chat, env=cfg.mode.value)
+        tg.fire(f"🤖 Бот запущен. Среда: {cfg.mode.value.upper()}")
     bot = Bot(cfg)
 
     async def runner():
