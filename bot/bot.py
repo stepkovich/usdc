@@ -18,7 +18,7 @@ from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futur
 )
 
 from bot.config import Mode, BotConfig
-from bot.executor import Executor
+from bot.executor import Executor, unwrap
 from bot.feed import MarketFeed
 from bot.ledger import Ledger
 from bot.markets import parse_filters
@@ -567,14 +567,23 @@ class Bot:
             day_wins = sum(1 for d in recs if float(d.get("income", 0) or 0) > 0)
             day_losses = sum(1 for d in recs if float(d.get("income", 0) or 0) < 0)
 
-            # PnL за всё время (income с начала работы бота)
+            # PnL за всё время (income с начала работы бота, с пагинацией:
+            # биржа отдаёт максимум 1000 строк за запрос — листаем дальше)
             bot_start = int(datetime(2026, 9, 17, 11, 0, tzinfo=timezone.utc).timestamp() * 1000)
-            rp_all = unwrap(self.exec.client.rest_api.get_income_history(
-                income_type="REALIZED_PNL", start_time=bot_start, limit=1000).data())
-            ra_rows = getattr(rp_all, "root", None) or rp_all
-            total_pnl = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
-                           for r in ra_rows
-                           if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
+            total_pnl = 0.0
+            cur_start = bot_start
+            for _ in range(50):  # жёсткий предел страниц
+                rp_all = unwrap(self.exec.client.rest_api.get_income_history(
+                    income_type="REALIZED_PNL", start_time=cur_start, limit=1000).data())
+                ra_rows = getattr(rp_all, "root", None) or rp_all
+                if not ra_rows:
+                    break
+                total_pnl += sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
+                                for r in ra_rows
+                                if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
+                if len(ra_rows) < 1000:
+                    break
+                cur_start = int(ra_rows[-1].model_dump(by_alias=True).get("time", cur_start)) + 1
 
             # комиссии за сегодня
             comm = unwrap(self.exec.client.rest_api.get_income_history(
