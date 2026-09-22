@@ -549,6 +549,63 @@ class Bot:
             if st.position:
                 st.position["stop_id"] = oid
 
+    async def send_hourly_report(self) -> None:
+        """Почасовой отчёт в Telegram: PnL дня, позиции, WR, общий PnL.
+        Все числа — из income history биржи (источник правды)."""
+        if not tg.TOKEN or not tg.CHAT_ID:
+            return
+        try:
+            # PnL за сегодня (с 00:00 UTC) — из income
+            day_start = int(datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+            rp = unwrap(self.exec.client.rest_api.get_income_history(
+                income_type="REALIZED_PNL", start_time=day_start, limit=1000).data())
+            rrows = getattr(rp, "root", None) or rp
+            recs = [r.model_dump(by_alias=True) for r in rrows
+                    if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC")]
+            day_pnl = sum(float(d.get("income", 0) or 0) for d in recs)
+            day_wins = sum(1 for d in recs if float(d.get("income", 0) or 0) > 0)
+            day_losses = sum(1 for d in recs if float(d.get("income", 0) or 0) < 0)
+
+            # PnL за всё время (income с начала работы бота)
+            bot_start = int(datetime(2026, 9, 17, 11, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            rp_all = unwrap(self.exec.client.rest_api.get_income_history(
+                income_type="REALIZED_PNL", start_time=bot_start, limit=1000).data())
+            ra_rows = getattr(rp_all, "root", None) or rp_all
+            total_pnl = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
+                           for r in ra_rows
+                           if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
+
+            # комиссии за сегодня
+            comm = unwrap(self.exec.client.rest_api.get_income_history(
+                income_type="COMMISSION", start_time=day_start, limit=1000).data())
+            crows = getattr(comm, "root", None) or comm
+            day_comm = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
+                          for r in crows
+                          if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
+
+            # позиции: направления и нереализованный PnL
+            snap = await asyncio.to_thread(self.exec.snapshot)
+            longs, shorts = 0, 0
+            upl = 0.0
+            for p in snap["positions"]:
+                amt = float(p.get("positionAmt", 0) or 0)
+                if amt == 0 or not p.get("symbol", "").endswith("USDC"):
+                    continue
+                if amt > 0: longs += 1
+                else: shorts += 1
+                upl += float(p.get("unRealizedProfit", 0) or 0)
+
+            env_tag = f"[{self.cfg.mode.value.upper()}]"
+            lines = [f"📊 {env_tag} Отчёт {datetime.now(timezone.utc).strftime('%H:%M UTC')}"]
+            lines.append(f"Сегодня: {day_pnl:+.2f} USDC ({day_wins}W / {day_losses}L)")
+            lines.append(f"За всё время: {total_pnl:+.2f} USDC (реализованный, income)")
+            lines.append(f"Позиции: {longs} лонг / {shorts} шорт, нереализ. {upl:+.2f}")
+            lines.append(f"Комиссии сегодня: {day_comm:+.2f} USDC")
+            tg.fire("\n".join(lines))
+        except Exception:
+            log.exception("send_hourly_report")
+
     def log_universe_state(self) -> None:
         """П1: сколько пар торгуемо при текущем бюджете, минимум для юниверса."""
         if not self.balance_snapshot or self.balance_snapshot <= 0:
@@ -597,8 +654,17 @@ class Bot:
 
     # ---------------- watchdog ----------------
     async def watchdog(self) -> None:
+        last_hourly_report = 0
         while not self._stop.is_set():
             await asyncio.sleep(30)
+            # почасовой отчёт в Telegram (на ровном часе)
+            now_ts = time.time()
+            if now_ts - last_hourly_report >= 3600:
+                last_hourly_report = now_ts
+                try:
+                    await self.send_hourly_report()
+                except Exception:
+                    log.exception("hourly telegram report")
             if datetime.now(timezone.utc).date() != self._day_key:
                 # новый торговый день (00:00 UTC): свежий баланс + сброс счётчиков
                 try:
