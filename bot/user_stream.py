@@ -1,18 +1,19 @@
 """User-data стрим демо/тестнет/mainnet.
 
-Сгенерированный SDK (websocket_streams.user_data) строит URL
-'<host>/private/stream?streams=<listenKey>' — на демо этот путь события
-НЕ доставляет (проверено raw-тестом всех форм). Рабочая форма:
-wss://<host>/ws/<listenKey>. Хост зависит от режима:
-демо/тестнет — fstream.binancefuture.com, mainnet — fstream.binance.com.
-Баг 22.09: хост был захардкожен демо-шный — на mainnet бот коннектился
-к демо-серверу с боевым listenKey, соединение живо, событий ноль
-(тихий отказ; вскрылось на первой сделке mainnet: тейк/стоп ставила
-реконсиляция через 27с вместо стрима за ~1с). Реконсиляция по REST
-остаётся источником правды и страховкой."""
+Формы URL у Binance РАЗНЫЕ на разных окружениях (проверено raw-тестом
+с контрольной заявкой 22.09: один listenKey, два сокета, события на одном):
+- демо/тестнет (fstream.binancefuture.com): доставляет '/ws/<listenKey>',
+  SDK-форма '/private/stream?streams=' молчит;
+- mainnet (fstream.binance.com): доставляет '/private/stream?streams=<listenKey>'
+  (combined-конверт {"stream":..., "data":{...}} — разворачиваем), форма '/ws/'
+  молчит (соединение живо, событий ноль).
+История: изначально SDK-форма была заменена на '/ws/' ради демо и захардкожена —
+на mainnet стрим умер тихо (баг #1, 22.09); '/ws/' на mainnet-хосте — баг #2.
+Реконсиляция по REST остаётся источником правды и страховкой."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Callable
 
@@ -21,7 +22,7 @@ import aiohttp
 log = logging.getLogger("userstream")
 
 WS_BASE_DEMO = "wss://fstream.binancefuture.com/ws/"
-WS_BASE_MAINNET = "wss://fstream.binance.com/ws/"
+WS_BASE_MAINNET = "wss://fstream.binance.com/private/stream?streams="
 
 
 class RawUserStream:
@@ -58,10 +59,12 @@ class RawUserStream:
                         while not self._stop.is_set():
                             msg = await ws.receive()
                             if msg.type == aiohttp.WSMsgType.TEXT:
-                                import json
                                 try:
-                                    self._on_event(json.loads(msg.data))
-                                except Exception:               # noqa: BLE001
+                                    d = json.loads(msg.data)
+                                    if isinstance(d, dict) and "data" in d:
+                                        d = d["data"]   # combined-форма mainnet: конверт
+                                    self._on_event(d)
+                                except Exception:           # noqa: BLE001
                                     log.exception("user event error")
                             elif msg.type in (aiohttp.WSMsgType.CLOSED,
                                               aiohttp.WSMsgType.ERROR):
