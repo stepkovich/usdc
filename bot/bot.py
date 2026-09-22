@@ -22,7 +22,7 @@ from bot.executor import Executor, unwrap
 from bot.feed import MarketFeed
 from bot.ledger import Ledger
 from bot.markets import parse_filters
-from bot.user_stream import RawUserStream
+from bot.user_stream import RawUserStream, WS_BASE_DEMO, WS_BASE_MAINNET
 import bot.telegram as tg
 from bot.strategy import (
     CancelEntry,
@@ -278,9 +278,10 @@ class Bot:
         def keepalive() -> None:
             self.exec.client.rest_api.keepalive_user_data_stream()
 
+        ws_base = WS_BASE_MAINNET if self.cfg.mode is Mode.MAINNET else WS_BASE_DEMO
         self._raw_stream = RawUserStream(
             new_key, keepalive,
-            lambda d: asyncio.create_task(self.on_user_event(d)))
+            lambda d: asyncio.create_task(self.on_user_event(d)), ws_base=ws_base)
         self._tasks.append(asyncio.create_task(self._raw_stream.run()))
 
     async def on_user_event(self, d: dict) -> None:

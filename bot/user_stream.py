@@ -1,11 +1,15 @@
-"""User-data стрим демо/тестнета.
+"""User-data стрим демо/тестнет/mainnet.
 
 Сгенерированный SDK (websocket_streams.user_data) строит URL
 '<host>/private/stream?streams=<listenKey>' — на демо этот путь события
 НЕ доставляет (проверено raw-тестом всех форм). Рабочая форма:
-wss://fstream.binancefuture.com/ws/<listenKey> (тестнет-хост = демо-бэкенд).
-Поэтому единственный стрим, где отступаем от SDK — этот; реконсиляция
-по REST остаётся источником правды и страховкой."""
+wss://<host>/ws/<listenKey>. Хост зависит от режима:
+демо/тестнет — fstream.binancefuture.com, mainnet — fstream.binance.com.
+Баг 22.09: хост был захардкожен демо-шный — на mainnet бот коннектился
+к демо-серверу с боевым listenKey, соединение живо, событий ноль
+(тихий отказ; вскрылось на первой сделке mainnet: тейк/стоп ставила
+реконсиляция через 27с вместо стрима за ~1с). Реконсиляция по REST
+остаётся источником правды и страховкой."""
 from __future__ import annotations
 
 import asyncio
@@ -16,16 +20,22 @@ import aiohttp
 
 log = logging.getLogger("userstream")
 
-WS_BASE = "wss://fstream.binancefuture.com/ws/"
+WS_BASE_DEMO = "wss://fstream.binancefuture.com/ws/"
+WS_BASE_MAINNET = "wss://fstream.binance.com/ws/"
 
 
 class RawUserStream:
-    def __init__(self, new_listen_key, keepalive_key, on_event: Callable[[dict], None]):
+    def __init__(self, new_listen_key, keepalive_key, on_event: Callable[[dict], None],
+                 ws_base: str):
         """
         new_listen_key: () -> str  (POST listenKey — создание)
         keepalive_key:  () -> None (PUT listenKey  — продление текущего)
         on_event: callable(dict)   — словарь события (ORDER_TRADE_UPDATE, ...)
+        ws_base:                   — адрес стрима по режиму (WS_BASE_*)
         """
+        if not ws_base:
+            raise ValueError("ws_base обязателен: у демо и mainnet разные хосты")
+        self._ws_base = ws_base
         self._new_key = new_listen_key
         self._keepalive = keepalive_key
         self._on_event = on_event
@@ -38,9 +48,10 @@ class RawUserStream:
             try:
                 key = await asyncio.to_thread(self._new_key)
                 async with session.ws_connect(
-                        WS_BASE + key, timeout=aiohttp.ClientWSTimeout(ws_close=10),
+                        self._ws_base + key, timeout=aiohttp.ClientWSTimeout(ws_close=10),
                         autoping=True) as ws:
-                    log.info("user-data WS подключён (ключ хвост %s)", key[-6:])
+                    log.info("user-data WS подключён: %s (ключ хвост %s)",
+                             self._ws_base, key[-6:])
                     backoff = 5
                     key_refresh = asyncio.create_task(self._refresh_key_loop())
                     try:
