@@ -243,6 +243,18 @@ class Executor:
             log.warning("cancel %s id=%s: %s", symbol, order_id, e)
             return False
 
+    def query_order_status(self, symbol: str, order_id: int) -> str | None:
+        """Статус заявки от биржи (источник правды): NEW / FILLED / CANCELED..."""
+        try:
+            r = self.client.rest_api.query_order(symbol=symbol, order_id=order_id)
+            d = r.data().model_dump(by_alias=True) if hasattr(r.data(), "model_dump") else {}
+            return d.get("status")
+        except BinanceError as e:
+            if api_code(e) == -2013:       # Order does not exist
+                return None
+            log.warning("query_order %s id=%s: %s", symbol, order_id, e)
+            return None
+
     def cancel_algo_order(self, symbol: str, algo_id: int) -> bool:
         try:
             self.client.rest_api.cancel_algo_order(algo_id=algo_id)

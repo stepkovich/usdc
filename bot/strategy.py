@@ -62,7 +62,21 @@ class CancelExit:
     reason: str
 
 
-Action = PlaceEntry | CancelEntry | PlaceTp | PlaceStop | CancelExit
+@dataclass
+class RearmEntry:
+    """Перестановка входной заявки на новый экстремум (BOT_REARM=1):
+    сначала гасим старую заявку (правда — ответ биржи), затем ставим новую
+    на свежий уровень Дончиана; если старая успела исполниться — перестановка
+    отменяется, позицией ведёт обычный цикл."""
+    symbol: str
+    old_order_id: int
+    side: Side            # сторона позиции (не ордера)
+    level: Decimal        # новый уровень (свежий экстремум)
+    atr0: Decimal         # свежая ATR-фракция — под неё стоп и сайзинг
+    client_id: str
+
+
+Action = PlaceEntry | CancelEntry | RearmEntry | PlaceTp | PlaceStop | CancelExit
 
 
 @dataclass
@@ -98,6 +112,29 @@ class Strategy:
             # насколько близко цена подходила к уровню (для статистики упущенных входов)
             gap = abs(bar.close - p["level"]) / p["level"]
             p["min_gap"] = min(p.get("min_gap", 1.0), gap)
+
+            # rearm: бар закрылся ЗА старым уровнем в направлении пробоя и
+            # свежий экстремум Дончиана дальше старого -> переставляем заявку
+            # (бот-порт варианта rearm_ab.py: уровень едет за ценой)
+            if cfg.rearm and p.get("order_id"):
+                try:
+                    d_high, d_low = h.donchian()
+                except ValueError:
+                    d_high = d_low = None
+                new_lvl = None
+                if p["side"] is Side.LONG and d_high and \
+                        bar.close > p["level"] and d_high > p["level"]:
+                    new_lvl = d_high
+                elif p["side"] is Side.SHORT and d_low and \
+                        bar.close < p["level"] and d_low < p["level"]:
+                    new_lvl = d_low
+                if new_lvl is not None:
+                    cid = f"scr-E-{h.symbol}-{st.bars_seen}r"
+                    log.info("REARM %s %s уровень %s -> %s", h.symbol,
+                             p["side"].value, p["level"], new_lvl)
+                    acts.append(RearmEntry(h.symbol, p["order_id"], p["side"],
+                                           new_lvl, h.atr_frac, cid))
+                    return acts
             if st.bars_seen > p["deadline"]:
                 acts.append(CancelEntry(h.symbol, p["order_id"], "timeout",
                                         p.get("min_gap", 1.0) * 10000))

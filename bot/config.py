@@ -75,6 +75,7 @@ class BotConfig(BaseModel):
     total_daily_loss_pct: Decimal = Decimal("0.03")  # общий дневной кап на ОБЕ стороны
     leverage: int = 20                         # запас до ликвидации > 2x худшего стопа
     dry_run: bool = False                      # True: сигналы только в журнал
+    rearm: bool = False                        # перестановка заявки на новый экстремум
 
     # учёт «как будто комиссии нет» (ваш тариф) + реальность демо
     assume_maker_fee: Decimal = Decimal("0")       # тариф: мейкер 0
@@ -110,6 +111,7 @@ class BotConfig(BaseModel):
             total_daily_loss_pct=Decimal(os.environ.get("BOT_TOTAL_DAILY_LOSS_PCT", "0.03")),
             leverage=int(os.environ.get("BOT_LEVERAGE", "20")),
             dry_run=os.environ.get("BOT_DRY_RUN", "1") == "1",
+            rearm=os.environ.get("BOT_REARM", "0") == "1",
         )
         if os.environ.get("BOT_SYMBOLS"):
             cfg.symbols = [s.strip().upper()

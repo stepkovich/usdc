@@ -235,6 +235,99 @@ class Bot:
                                 self.exec.cancel_order, a.symbol, a.order_id)
                         self.ledger.event("cancel_entry", a.symbol,
                                           {"order_id": a.order_id, "reason": a.reason})
+                    case RearmEntry():
+                        # перестановка заявки на новый экстремум (BOT_REARM=1).
+                        # Порядок жёсткий: отмена старой (правда — ответ биржи),
+                        # проверка гонок, только потом новая заявка.
+                        st2 = self.strategy.state(a.symbol)
+                        f = self.filters[a.symbol]
+                        price = f.round_price(a.level)
+                        stop_dist = a.atr0 * self.cfg.stop_atr_mult
+                        if self.balance_snapshot is None or stop_dist <= 0:
+                            continue
+                        budget = self.balance_snapshot * self.cfg.risk_pct
+                        natural = budget / stop_dist
+                        floor = f.min_notional * self.cfg.notional_buffer
+                        # направленный дневной лимит: перестановка = новое входное решение
+                        if self.cfg.daily_loss_pct > 0 and \
+                                self.daily_locked.get(a.side.value):
+                            log.warning("%s: rearm пропущен — дневной лимит %s",
+                                        a.symbol, a.side.value)
+                            self.ledger.event("rearm_entry", a.symbol,
+                                              {"result": "skip_lock",
+                                               "old_order_id": a.old_order_id})
+                            if not self.cfg.dry_run and a.old_order_id:
+                                await asyncio.to_thread(self.exec.cancel_order,
+                                                        a.symbol, a.old_order_id)
+                            st2.pending = None
+                            continue
+                        if natural < floor:
+                            log.warning("%s: rearm отменён — размер %.2f ниже "
+                                        "пола %.2f (стоп %.2f%%)", a.symbol,
+                                        natural, floor, stop_dist * 100)
+                            self.ledger.event("rearm_entry", a.symbol,
+                                              {"result": "skip_floor",
+                                               "old_order_id": a.old_order_id})
+                            if not self.cfg.dry_run and a.old_order_id:
+                                await asyncio.to_thread(self.exec.cancel_order,
+                                                        a.symbol, a.old_order_id)
+                            st2.pending = None
+                            continue
+                        qty = f.qty_for_notional(
+                            min(natural, self.cfg.max_notional), price)
+                        if qty is None:
+                            log.warning("%s: rearm — лот не сходится (size=%.2f)",
+                                        a.symbol, natural)
+                            self.ledger.event("rearm_entry", a.symbol,
+                                              {"result": "skip_lot",
+                                               "old_order_id": a.old_order_id})
+                            if not self.cfg.dry_run and a.old_order_id:
+                                await asyncio.to_thread(self.exec.cancel_order,
+                                                        a.symbol, a.old_order_id)
+                            st2.pending = None
+                            continue
+                        if self.cfg.dry_run:
+                            log.info("[DRY] rearm %s -> уровень %s", a.symbol, price)
+                            continue
+                        # 1) гасим старую заявку; -2011 => её уже нет — уточняем
+                        cancelled = await asyncio.to_thread(
+                            self.exec.cancel_order, a.symbol, a.old_order_id) \
+                            if a.old_order_id else False
+                        if not cancelled and a.old_order_id:
+                            status = await asyncio.to_thread(
+                                self.exec.query_order_status, a.symbol, a.old_order_id)
+                            if status in ("FILLED", "PARTIALLY_FILLED"):
+                                # старая успела исполниться — позицию ведёт
+                                # обычный цикл, перестановка отменяется
+                                log.info("%s: rearm отменён — заявка уже "
+                                         "исполнилась (%s)", a.symbol, status)
+                                self.ledger.event("rearm_entry", a.symbol,
+                                                  {"result": "race_filled",
+                                                   "old_order_id": a.old_order_id})
+                                continue
+                        # 2) pending всё ещё наш? (fill по стриму мог прийти в фоне)
+                        if not st2.pending or \
+                                st2.pending.get("order_id") != a.old_order_id:
+                            log.info("%s: rearm отменён — состояние заявки "
+                                     "изменилось", a.symbol)
+                            continue
+                        # 3) новая заявка на свежем уровне
+                        oid = await asyncio.to_thread(
+                            self.exec.place_entry_limit, a.symbol,
+                            "BUY" if a.side.value == "LONG" else "SELL", price, qty,
+                            a.client_id)
+                        st2.pending.update(level=a.level, atr0=a.atr0,
+                                           client_id=a.client_id, order_id=oid or 0,
+                                           qty=qty,
+                                           deadline=st2.bars_seen + self.cfg.wait_bars)
+                        self.ledger.event("rearm_entry", a.symbol,
+                                          {"level": str(a.level), "qty": str(qty),
+                                           "order_id": oid or 0,
+                                           "old_order_id": a.old_order_id})
+                        tg.fire(f"🔁 <b>ПЕРЕСТАНОВКА {a.symbol} {a.side.value}</b>\n"
+                                f"{float(qty) * float(price):.2f} USDC @ {price}")
+                        log.info("rearm %s: новая заявка id=%s @%s", a.symbol,
+                                 oid, price)
                     case PlaceTp():
                         f = self.filters[a.symbol]
                         price = f.round_price(a.price)
