@@ -550,48 +550,51 @@ class Bot:
                 st.position["stop_id"] = oid
 
     async def send_hourly_report(self) -> None:
-        """Почасовой отчёт в Telegram: PnL дня, позиции, WR, общий PnL.
+        """Почасовой отчёт в Telegram: чистый PnL дня и за всё время, позиции.
+        «Чистыми» = все типы income (реализованный PnL, комиссии, фандинг,
+        страховочный клиринг) — то, что реально видно по балансу счёта.
         Все числа — из income history биржи (источник правды)."""
         if not tg.TOKEN or not tg.CHAT_ID:
             return
         try:
-            # PnL за сегодня (с 00:00 UTC) — из income
+            def fetch_income(start_ms, income_type=None):
+                # пагинация: биржа отдаёт максимум 1000 строк за запрос
+                cur, out = start_ms, []
+                for _ in range(50):
+                    kw = dict(start_time=cur, limit=1000)
+                    if income_type:
+                        kw["income_type"] = income_type
+                    rp = unwrap(self.exec.client.rest_api.get_income_history(**kw).data())
+                    rows = getattr(rp, "root", None) or rp
+                    if not rows:
+                        break
+                    out.extend(r.model_dump(by_alias=True) for r in rows)
+                    if len(rows) < 1000:
+                        break
+                    cur = int(out[-1].get("time", cur)) + 1
+                return [r for r in out if str(r.get("symbol", "")).endswith("USDC")]
+
+            def fl(r):
+                return float(r.get("income", 0) or 0)
+
+            # сегодня (с 00:00 UTC): все типы income по USDC-парам
             day_start = int(datetime.now(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-            rp = unwrap(self.exec.client.rest_api.get_income_history(
-                income_type="REALIZED_PNL", start_time=day_start, limit=1000).data())
-            rrows = getattr(rp, "root", None) or rp
-            recs = [r.model_dump(by_alias=True) for r in rrows
-                    if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC")]
-            day_pnl = sum(float(d.get("income", 0) or 0) for d in recs)
-            day_wins = sum(1 for d in recs if float(d.get("income", 0) or 0) > 0)
-            day_losses = sum(1 for d in recs if float(d.get("income", 0) or 0) < 0)
+            day_rows = fetch_income(day_start)
+            day_realized = sum(fl(r) for r in day_rows
+                               if r.get("incomeType") == "REALIZED_PNL")
+            day_wins = sum(1 for r in day_rows
+                           if r.get("incomeType") == "REALIZED_PNL" and fl(r) > 0)
+            day_losses = sum(1 for r in day_rows
+                             if r.get("incomeType") == "REALIZED_PNL" and fl(r) < 0)
+            day_comm = sum(fl(r) for r in day_rows
+                           if r.get("incomeType") == "COMMISSION")
+            day_net = sum(fl(r) for r in day_rows)
+            day_other = day_net - day_realized - day_comm
 
-            # PnL за всё время (income с начала работы бота, с пагинацией:
-            # биржа отдаёт максимум 1000 строк за запрос — листаем дальше)
+            # за всё время: чистое изменение счёта по income (с пагинацией)
             bot_start = int(datetime(2026, 9, 17, 11, 0, tzinfo=timezone.utc).timestamp() * 1000)
-            total_pnl = 0.0
-            cur_start = bot_start
-            for _ in range(50):  # жёсткий предел страниц
-                rp_all = unwrap(self.exec.client.rest_api.get_income_history(
-                    income_type="REALIZED_PNL", start_time=cur_start, limit=1000).data())
-                ra_rows = getattr(rp_all, "root", None) or rp_all
-                if not ra_rows:
-                    break
-                total_pnl += sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
-                                for r in ra_rows
-                                if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
-                if len(ra_rows) < 1000:
-                    break
-                cur_start = int(ra_rows[-1].model_dump(by_alias=True).get("time", cur_start)) + 1
-
-            # комиссии за сегодня
-            comm = unwrap(self.exec.client.rest_api.get_income_history(
-                income_type="COMMISSION", start_time=day_start, limit=1000).data())
-            crows = getattr(comm, "root", None) or comm
-            day_comm = sum(float(r.model_dump(by_alias=True).get("income", 0) or 0)
-                          for r in crows
-                          if r.model_dump(by_alias=True).get("symbol", "").endswith("USDC"))
+            total_net = sum(fl(r) for r in fetch_income(bot_start))
 
             # позиции: направления и нереализованный PnL
             snap = await asyncio.to_thread(self.exec.snapshot)
@@ -607,10 +610,12 @@ class Bot:
 
             env_tag = f"[{self.cfg.mode.value.upper()}]"
             lines = [f"📊 {env_tag} Отчёт {datetime.now(timezone.utc).strftime('%H:%M UTC')}"]
-            lines.append(f"Сегодня: {day_pnl:+.2f} USDC ({day_wins}W / {day_losses}L)")
-            lines.append(f"За всё время: {total_pnl:+.2f} USDC (реализованный, income)")
+            lines.append(f"Сегодня чистыми: {day_net:+.2f} USDC (реализ. {day_realized:+.2f} "
+                         f"[{day_wins}W/{day_losses}L], комисс. {day_comm:+.2f}, "
+                         f"прочее {day_other:+.2f})")
             lines.append(f"Позиции: {longs} лонг / {shorts} шорт, нереализ. {upl:+.2f}")
-            lines.append(f"Комиссии сегодня: {day_comm:+.2f} USDC")
+            lines.append(f"За всё время чистыми: {total_net:+.2f} USDC "
+                         f"— тот рост, что виден по балансу счёта")
             tg.fire("\n".join(lines))
         except Exception:
             log.exception("send_hourly_report")
