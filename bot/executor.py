@@ -163,7 +163,15 @@ class Executor:
                     quantity=float(qty), price=float(price),
                     new_client_order_id=client_id if attempt == 0 else f"{client_id}r{attempt}")
                 if self.hedge_mode:
-                    kw["position_side"] = pos_side or self._pside(side)
+                    # pos_side = сторона ПОЗИЦИИ, обязательна. Фолбэк на сторону
+                    # ордера ЗАПРЕЩЁН: для закрывающего ордера она обратна стороне
+                    # позиции, и молчаливый вывод делал TP открывающим (баг 22.09,
+                    # LTCUSDC: позиция удвоилась). Нет стороны — падаем громко.
+                    if not pos_side:
+                        raise ValueError(
+                            f"{symbol}: place_tp_limit в HEDGE требует pos_side "
+                            "(сторона ПОЗИЦИИ), получен None")
+                    kw["position_side"] = pos_side
                 else:
                     kw["reduce_only"] = NewOrderReduceOnlyEnum["TRUE"].value
                 r = self.client.rest_api.new_order(**kw)

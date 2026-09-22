@@ -156,7 +156,12 @@ class Strategy:
             return []                        # хвост после реконсиляции — игнор
         p = st.pending
         side = p["side"]
-        exit_side = Side.SHORT if side is Side.LONG else Side.LONG
+        # side во всех действиях = сторона ПОЗИЦИИ (apply() трактует так же:
+        # LONG -> закрывающий SELL, SHORT -> закрывающий BUY).
+        # Баг 22.09: сюда клалась сторона НАОБОРОТ, apply() разворачивал вторично
+        # -> для шорта TP уходил SELL. На демо (ONE-WAY) инверсию гасил отказ
+        # reduceOnly, на mainnet HEDGE ордер становился ОТКРЫВАЮЩИМ и удваивал
+        # позицию (LTCUSDC -0.094 -> -0.188).
         tp_price = (avg_price * (1 + self.cfg.target_pct) if side is Side.LONG
                     else avg_price * (1 - self.cfg.target_pct))
         stop_price = (avg_price * (1 - self.cfg.stop_atr_mult * p["atr0"]) if side is Side.LONG
@@ -168,8 +173,8 @@ class Strategy:
         cid_stop = f"scr-S-{symbol}-{order_id}"
         log.info("ВХОД %s %s qty=%s avg=%s TP=%s STOP=%s",
                  symbol, side.value, qty, avg_price, tp_price, stop_price)
-        return [PlaceTp(symbol, exit_side, tp_price, qty, cid_tp),
-                PlaceStop(symbol, exit_side, stop_price, cid_stop)]
+        return [PlaceTp(symbol, side, tp_price, qty, cid_tp),
+                PlaceStop(symbol, side, stop_price, cid_stop)]
 
     # ---------- выход исполнился ----------
     def exit_filled(self, symbol: str, kind: str) -> list[Action]:

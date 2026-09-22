@@ -239,7 +239,7 @@ class Bot:
                         oid = await asyncio.to_thread(
                             self.exec.place_tp_limit, a.symbol,
                             "SELL" if a.side.value == "LONG" else "BUY", price,
-                            a.qty, a.client_id)
+                            a.qty, a.client_id, pos_side=a.side.value)
                         self.exits.setdefault(a.symbol, {})["tp"] = oid
                     case PlaceStop():
                         f = self.filters[a.symbol]
