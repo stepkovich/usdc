@@ -291,7 +291,10 @@ class Bot:
                 o = d.get("o") or {}
                 sym, status, cid = o.get("s"), o.get("X"), str(o.get("c", ""))
                 role = cid.split("-")[1] if cid.startswith("scr-") else "?"
-                self.ledger.fill(sym, role, o)
+                # в журнал — только реальные исполнения: NEW/CANCELED с нулевым
+                # количеством писались призрачными строками и портили счётчики
+                if status in ("FILLED", "PARTIALLY_FILLED"):
+                    self.ledger.fill(sym, role, o)
                 if status not in ("FILLED", "PARTIALLY_FILLED", "NEW"):
                     return
                 D0 = Decimal(0)
