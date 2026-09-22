@@ -24,6 +24,7 @@ from bot.ledger import Ledger
 from bot.markets import parse_filters
 from bot.user_stream import RawUserStream, WS_BASE_DEMO, WS_BASE_MAINNET
 import bot.telegram as tg
+import bot.timesync as timesync
 from bot.strategy import (
     CancelEntry,
     CancelExit,
@@ -96,6 +97,12 @@ class Bot:
             self.filters[s] = parse_filters(s, usdc[s])
         # пары, где 50 USDC < минимального лота — не торгуем
         self.exec = Executor(cfg, self.filters)
+        # синхронизация времени с биржей ДО первого подписанного запроса:
+        # защита от -1021 «Timestamp outside recvWindow»
+        timesync.install()
+        off = await asyncio.to_thread(timesync.measure, self.exec.client.rest_api)
+        log.info("время: офсет к бирже %+d мс (round-trip %.0f мс)",
+                 off, timesync.LAST_RTT_MS)
         self.symbols = list(usdc.keys() & set(self.symbols))
         log.info("режим=%s пар=%d исполнение=%s рынок=%s",
                  cfg.mode.value, len(self.symbols), cfg.exec_rest_url,
@@ -673,6 +680,7 @@ class Bot:
     # ---------------- watchdog ----------------
     async def watchdog(self) -> None:
         last_hourly_report = 0
+        last_timesync = 0.0
         while not self._stop.is_set():
             await asyncio.sleep(30)
             # почасовой отчёт в Telegram (на ровном часе)
@@ -693,6 +701,17 @@ class Bot:
                     self.log_universe_state()
                 except Exception:
                     log.exception("суточный сброс")
+            # синхронизация времени с биржей каждые 15 мин (анти -1021)
+            if now_ts - last_timesync >= 900:
+                last_timesync = now_ts
+                try:
+                    off = await asyncio.to_thread(
+                        timesync.measure, self.exec.client.rest_api)
+                    if abs(off) > 1000:
+                        log.warning("время: офсет к бирже %+d мс — крупный дрейф",
+                                    off)
+                except Exception:
+                    log.exception("timesync")
             if self.feed.stale(180):
                 log.error("фид молчит >180с — переподключение стримов")
                 try:

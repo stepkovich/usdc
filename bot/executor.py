@@ -178,7 +178,13 @@ class Executor:
                 oid = int(r.data().order_id)
                 break
             except BinanceError as e:
-                if api_code(e) in (-2022, -4509) and attempt < 3:
+                if api_code(e) in (-2022, -4509, -1021) and attempt < 3:
+                    if api_code(e) == -1021:
+                        # часы разошлись с биржей — внеплановый ресинк и повтор
+                        # (функция синхронная, крутится в to_thread — блокировка ок)
+                        import bot.timesync as timesync
+                        off = timesync.measure(self.client.rest_api)
+                        log.warning("время: -1021, ресинк по бирже, офсет %+d мс", off)
                     time.sleep(2)
                     continue
                 raise
@@ -210,7 +216,11 @@ class Executor:
                 r = self.client.rest_api.new_algo_order(**kw)
                 break
             except BinanceError as e:
-                if api_code(e) in (-4509, -2022) and attempt < 4:
+                if api_code(e) in (-4509, -2022, -1021) and attempt < 4:
+                    if api_code(e) == -1021:
+                        import bot.timesync as timesync
+                        off = timesync.measure(self.client.rest_api)
+                        log.warning("время: -1021, ресинк по бирже, офсет %+d мс", off)
                     time.sleep(3)
                     continue
                 raise
