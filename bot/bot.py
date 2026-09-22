@@ -498,6 +498,25 @@ class Bot:
                                     self.exec.cancel_algo_order, s, ids["stop"])
                         st.cooldown_until = st.bars_seen + self.cfg.cool_bars
                         st.position = None
+                # сироты-входы: заявки scr-E-* без живого pending-состояния.
+                # Рестарт теряет st.pending, а GTC-лимитка остаётся на книге и
+                # может наполниться через часы на неуправляемый объём
+                # (демо 22.09: SHIB/PEPE со вчера). Сверяем по client_id,
+                # который появляется в pending ещё ДО выставления заявки.
+                live_cids = {st.pending["client_id"]
+                             for st in self.strategy.states.values()
+                             if st.pending and st.pending.get("client_id")}
+                for o in snap["orders"]:
+                    cid = str(o.get("clientOrderId", ""))
+                    if not cid.startswith("scr-E-") or cid in live_cids:
+                        continue
+                    log.warning("%s: сирота-заявка входа id=%s отменена "
+                                "(состояние потеряно)", o["symbol"], cid)
+                    self.ledger.event("cancel_entry", o["symbol"],
+                                      {"reason": "orphan", "order_id": o["orderId"]})
+                    if not self.cfg.dry_run:
+                        await asyncio.to_thread(self.exec.cancel_order,
+                                                o["symbol"], int(o["orderId"]))
                         self.exits[s] = {}
                 self.ledger.event("snapshot", "", {
                     "positions": len(pos_syms),
