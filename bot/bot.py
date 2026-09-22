@@ -646,8 +646,8 @@ class Bot:
         min_sym = min(required, key=required.get)
         min_need = required[min_sym].quantize(Decimal("1"))
         if tradable:
-            log.info("юниверс: торгуемых %d/%d при балансе %s; минимум для полного "
-                     "юниверса %s USDC (на %s)", len(tradable), len(self.symbols),
+            log.info("юниверс: торгуемых %d/%d при балансе %s; порог входа на самую "
+                     "дешёвую пару %s USDC (на %s)", len(tradable), len(self.symbols),
                      self.balance_snapshot.quantize(Decimal("1")), min_need, min_sym)
         else:
             log.warning("юниверс: НЕ ХВАТАЕТ НИ НА ЧТО — бюджет %s USDC меньше пола "
