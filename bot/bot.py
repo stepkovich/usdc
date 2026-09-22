@@ -215,8 +215,8 @@ class Bot:
                                      a.side.value, qty, price)
                             continue
                         tg.fire(f"{'🟢' if a.side.value == 'LONG' else '🔴'} "
-                                f"<b>ВХОД {a.symbol} {a.side.value}</b>\n"
-                                f"{size:.2f} USDC @ {price}")
+                                f"<b>ЗАЯВКА {a.symbol} {a.side.value}</b>\n"
+                                f"{size:.2f} USDC @ {price} — ждёт отката к уровню")
                         oid = await asyncio.to_thread(
                             self.exec.place_entry_limit, a.symbol,
                             "BUY" if a.side.value == "LONG" else "SELL", price, qty,
@@ -360,6 +360,11 @@ class Bot:
                     avg = Decimal(o.get("ap") or "0")
                     acc.update(entry_ts=time.time(), entry_px=avg, qty=qty,
                                side=o.get("S"))
+                    # настоящий «ВХОД» = позиция открыта (исполнение заявки)
+                    d_side = "LONG" if o.get("S") == "BUY" else "SHORT"
+                    tg.fire(f"{'🟢' if d_side == 'LONG' else '🔴'} "
+                            f"<b>ВХОД {sym} {d_side}</b>\n"
+                            f"{float(qty) * float(avg):.2f} USDC @ {avg}")
                     acts = self.strategy.entry_filled(sym, qty, avg, int(o.get("i", 0)))
                     await self.apply(acts)
                 elif role in ("T", "S") and status == "FILLED":
@@ -385,6 +390,10 @@ class Bot:
                                               {"side": d_side,
                                                "pnl": str(self.daily_pnl[d_side]),
                                                "limit": str(limit)})
+                            tg.fire(f"🛑 <b>Дневной лимит {d_side}</b>: убыток "
+                                    f"{self.daily_pnl[d_side].quantize(Decimal('0.01')):+.2f} "
+                                    f"USDC — новые входы {d_side} приостановлены "
+                                    f"до 00:00 UTC")
                             log.warning("ДНЕВНОЙ ЛИМИТ %s: убыток %s <= -%s баланса — "
                                         "новые входы %s приостановлены до суточного "
                                         "сброса", d_side, self.daily_pnl[d_side].quantize(
@@ -679,14 +688,17 @@ class Bot:
 
     # ---------------- watchdog ----------------
     async def watchdog(self) -> None:
-        last_hourly_report = 0
+        # отчёт шлём на РОВНЫЙ ЧАС: при старте запоминаем текущий час
+        # (не стреляя сразу), отчёт уходит при смене часа — :00 по UTC
+        # (= :00 по МСК, UTC+3)
+        last_report_hour = datetime.now(timezone.utc).hour
         last_timesync = 0.0
         while not self._stop.is_set():
             await asyncio.sleep(30)
             # почасовой отчёт в Telegram (на ровном часе)
             now_ts = time.time()
-            if now_ts - last_hourly_report >= 3600:
-                last_hourly_report = now_ts
+            if datetime.now(timezone.utc).hour != last_report_hour:
+                last_report_hour = datetime.now(timezone.utc).hour
                 try:
                     await self.send_hourly_report()
                 except Exception:
