@@ -30,8 +30,9 @@ class Structure15m:
         self._last_open_ms: int | None = None
 
     def push_1m(self, open_time_ms: int, high: float, low: float,
-                close: float, volume: float) -> None:
-        """Одна ЗАКРЫТАЯ минутка; на границе 15 минут — пересчёт структуры."""
+                close: float, volume: float, recompute: bool = True) -> None:
+        """Одна ЗАКРЫТАЯ минутка; на границе 15 минут — пересчёт структуры.
+        recompute=False при заливке истории: пересчёт один раз в конце."""
         self._buf.append((high, low))
         if (open_time_ms // 60000) % 15 != 14:
             return
@@ -41,7 +42,8 @@ class Structure15m:
         o_ms = open_time_ms - 14 * 60000
         self._rows.append((pd.Timestamp(o_ms, unit="ms", tz="UTC"),
                            float(close), h, l, float(close), volume))
-        self._recompute()
+        if recompute:
+            self._recompute()
 
     def _recompute(self) -> None:
         n = len(self._rows)

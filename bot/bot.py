@@ -13,6 +13,9 @@ from pathlib import Path
 
 from binance_common.configuration import ConfigurationRestAPI, ConfigurationWebSocketStreams
 from binance_common.constants import DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_TESTNET_URL
+from binance_sdk_derivatives_trading_usds_futures.rest_api.models import (
+    KlineCandlestickDataIntervalEnum,
+)
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
 )
@@ -863,9 +866,62 @@ class Bot:
                     log.exception("перезапуск стримов не удался")
 
     # ---------------- главный цикл ----------------
+    async def _smc_backfill(self) -> None:
+        """Прогрев SMC-структуры историей: 1500 минуток на пару -> ~100
+        15-минуток, пересчёт один раз на пару (без него старт ждал бы
+        ~15 часов, пока наберётся окно свингов)."""
+        t0 = time.time()
+        done = 0
+        for chunk_start in range(0, len(self.symbols), 8):
+            chunk = self.symbols[chunk_start:chunk_start + 8]
+
+            def load(sym):
+                """До 4 страниц по 1500 минуток в прошлое: окно должно быть
+                достаточным, чтобы в нём был хотя бы один слом структуры
+                (иначе bias после рестарта теряется)."""
+                out = []
+                end_ms = None
+                for _ in range(4):
+                    kw = dict(symbol=sym,
+                              interval=KlineCandlestickDataIntervalEnum["INTERVAL_1m"].value,
+                              limit=1500)
+                    if end_ms is not None:
+                        kw["end_time"] = end_ms
+                    resp = self.feed.market_rest.rest_api.kline_candlestick_data(**kw)
+                    rows = getattr(resp.data(), "root", None) or resp.data()
+                    rows = list(rows)[:-1]      # последний бар ещё не закрыт
+                    if not rows:
+                        break
+                    out = rows + out
+                    end_ms = int(rows[0][0]) - 1
+                    if len(out) >= 4500:
+                        break
+                return out
+
+            res = await asyncio.gather(
+                *[asyncio.to_thread(load, s) for s in chunk],
+                return_exceptions=True)
+            for s, rows in zip(chunk, res):
+                if isinstance(rows, Exception):
+                    log.warning("smc-backfill %s: %s", s, rows)
+                    continue
+                st = self.smc_struct[s]
+                for r in rows:
+                    st.push_1m(int(r[0]), float(r[2]), float(r[3]),
+                               float(r[4]), float(r[5]), recompute=False)
+                st._recompute()
+                done += 1
+            await asyncio.sleep(0.3)
+        known = sum(1 for s in self.symbols if self.smc_struct[s].bias is not None)
+        log.info("SMC-структура прогрета: %d/%d пар, bias определён на %d; "
+                 "(%d мс)", done, len(self.symbols), known,
+                 int((time.time() - t0) * 1000))
+
     async def run(self) -> None:
         await self.setup()
         await self.feed.warmup(self.symbols)
+        if self.cfg.smc_filter:
+            await self._smc_backfill()
         self.log_universe_state()
         await self.feed.start_streams(self.symbols)
         await self.start_user_stream()
