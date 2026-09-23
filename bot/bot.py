@@ -741,7 +741,7 @@ class Bot:
                 upl += float(p.get("unRealizedProfit", 0) or 0)
 
             env_tag = f"[{self.cfg.mode.value.upper()}]"
-            lines = [f"📊 {env_tag} Отчёт {datetime.now(timezone.utc).strftime('%H:%M UTC')}"]
+            lines = [f"📊 Отчёт {datetime.now(timezone.utc).strftime('%H:%M UTC')}"]
             lines.append(f"Сегодня чистыми: {day_net:+.2f} USDC (реализ. {day_realized:+.2f} "
                          f"[{day_wins}W/{day_losses}L], комисс. {day_comm:+.2f}, "
                          f"прочее {day_other:+.2f})")
