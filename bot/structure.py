@@ -7,15 +7,14 @@ bias = направление последнего ИЗВЕСТНОГО слом
 чей свинг ещё не подтверждён (меньше SWING баров назад), не учитываются —
 заглядывания в будущее нет. До прогрева (~60 15-минуток) bias=None,
 фильтр не режет.
+
+ВАЖНО: numpy/pandas/smc_lib импортируются ЛЕНИВО (внутри _recompute) —
+модуль не должен ронять импорт bot.py там, где фильтр выключен и этих
+пакетов нет (контейнер реалнета; инцидент 23.09).
 """
 from __future__ import annotations
 
 from collections import deque
-
-import numpy as np
-import pandas as pd
-
-from bot.smc_lib import smc as _smc
 
 SWING = 20                       # баров 15м для подтверждения свинга (5 ч)
 WINDOW = 600                     # скользящее окно 15м баров (~6 суток)
@@ -39,18 +38,22 @@ class Structure15m:
         h = max(x[0] for x in self._buf)
         l = min(x[1] for x in self._buf)
         self._buf = []
-        o_ms = open_time_ms - 14 * 60000
-        self._rows.append((pd.Timestamp(o_ms, unit="ms", tz="UTC"),
-                           float(close), h, l, float(close), volume))
+        self._rows.append((open_time_ms - 14 * 60000, float(close),
+                           h, l, float(close), volume))
         if recompute:
             self._recompute()
 
     def _recompute(self) -> None:
+        import numpy as np                      # лениво: см. шапку модуля
+        import pandas as pd
+        from bot.smc_lib import smc as _smc
+
         n = len(self._rows)
         if n < SWING * 3:
             self.bias = None
             return
-        idx = pd.DatetimeIndex([r[0] for r in self._rows])
+        idx = pd.DatetimeIndex(
+            pd.to_datetime([r[0] for r in self._rows], unit="ms", utc=True))
         ohlc = pd.DataFrame({"open": [r[1] for r in self._rows],
                              "high": [r[2] for r in self._rows],
                              "low": [r[3] for r in self._rows],
