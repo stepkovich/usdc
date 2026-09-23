@@ -25,6 +25,7 @@ from bot.markets import parse_filters
 from bot.user_stream import RawUserStream, WS_BASE_DEMO, WS_BASE_MAINNET
 import bot.telegram as tg
 import bot.timesync as timesync
+from bot.structure import Structure15m
 from bot.strategy import (
     CancelEntry,
     CancelExit,
@@ -105,6 +106,8 @@ class Bot:
         log.info("время: офсет к бирже %+d мс (round-trip %.0f мс)",
                  off, timesync.LAST_RTT_MS)
         self.symbols = list(usdc.keys() & set(self.symbols))
+        self.smc_struct = ({s: Structure15m(s) for s in self.symbols}
+                           if cfg.smc_filter else {})
         log.info("режим=%s пар=%d исполнение=%s рынок=%s",
                  cfg.mode.value, len(self.symbols), cfg.exec_rest_url,
                  cfg.market_streams_url)
@@ -879,9 +882,30 @@ class Bot:
                 log.info("пульс: %d закрытых баров за 5 мин", bars_seen)
                 bars_seen = 0
                 last_report = time.time()
+            if self.cfg.smc_filter and sym in self.smc_struct:
+                self.smc_struct[sym].push_1m(
+                    bar.open_time, float(bar.high), float(bar.low),
+                    float(bar.close), 0.0)
             h = self.feed.hist[sym]
             if h.ready:
                 acts = self.strategy.on_closed_bar(h, bar)
+                if acts and self.cfg.smc_filter and sym in self.smc_struct:
+                    bias = self.smc_struct[sym].bias
+                    kept = []
+                    for a in acts:
+                        if isinstance(a, PlaceEntry) and bias is not None:
+                            want = 1 if a.side.value == "LONG" else -1
+                            if bias != want:
+                                self.strategy.state(sym).pending = None
+                                self.ledger.event("smc_filter_skip", sym,
+                                                  {"side": a.side.value,
+                                                   "bias": bias})
+                                log.warning("%s: SMC-фильтр — вход %s против "
+                                            "структуры %s пропущен", sym,
+                                            a.side.value, bias)
+                                continue
+                        kept.append(a)
+                    acts = kept
                 if acts:
                     await self.apply(acts)
 
