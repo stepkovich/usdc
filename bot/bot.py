@@ -31,6 +31,7 @@ from bot.strategy import (
     PlaceEntry,
     PlaceStop,
     PlaceTp,
+    RearmEntry,
     Strategy,
 )
 
