@@ -317,6 +317,21 @@ class Bot:
                             self.exec.place_entry_limit, a.symbol,
                             "BUY" if a.side.value == "LONG" else "SELL", price, qty,
                             a.client_id)
+                        # 4) гонка: старая могла исполниться, ПОКА мы ставили
+                        # новую (fill-событие обнуляет pending). Тогда новую
+                        # заявку немедленно гасим — позиции быть не должно.
+                        if not st2.pending or \
+                                st2.pending.get("order_id") != a.old_order_id:
+                            if oid and not self.cfg.dry_run:
+                                await asyncio.to_thread(
+                                    self.exec.cancel_order, a.symbol, oid)
+                            self.ledger.event("rearm_entry", a.symbol,
+                                              {"result": "race_filled_late",
+                                               "order_id": oid or 0})
+                            log.warning("%s: rearm — старая заявка исполнилась "
+                                        "в момент перестановки, новая отменена",
+                                        a.symbol)
+                            continue
                         st2.pending.update(level=a.level, atr0=a.atr0,
                                            client_id=a.client_id, order_id=oid or 0,
                                            qty=qty,
