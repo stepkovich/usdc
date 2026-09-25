@@ -35,12 +35,8 @@ from pathlib import Path
 
 import numpy as np
 
-import timesync
-from binance_common.configuration import ConfigurationRestAPI
+import bot.timesync as timesync
 from binance_common.errors import Error as BinanceError
-from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
-    DerivativesTradingUsdsFutures,
-)
 
 log = logging.getLogger("lob.engine")
 ROOT = Path(__file__).resolve().parent.parent
@@ -74,17 +70,6 @@ def api_code(e):
         return int(json.loads(msg[msg.index("{"):msg.rindex("}") + 1]).get("code"))
     except Exception:
         return None
-
-
-def load_keys() -> tuple[str, str]:
-    k = s = ""
-    for line in KEYS_ENV.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("API_KEY="):
-            k = line.split("=", 1)[1].strip()
-        elif line.startswith("API_SECRET="):
-            s = line.split("=", 1)[1].strip()
-    return k, s
 
 
 class LobBot:
