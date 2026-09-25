@@ -21,6 +21,9 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 
+from binance_common.errors import Error as BinanceError
+from bot.executor import api_code
+
 import bot.telegram as tg
 from ml5h.features import feature_row
 
@@ -186,10 +189,19 @@ class Ml5hEngine:
         if qty <= 0:
             log.warning("%s: лот не сошёлся", sym)
             return
-        oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
-                                      "BUY", Decimal(str(bb)), qty,
-                                      f"ml5-{sym}-{int(time.time())}",
-                                      post_only=True)
+        try:
+            oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
+                                          "BUY", Decimal(str(bb)), qty,
+                                          f"ml5-{sym}-{int(time.time())}",
+                                          post_only=True)
+        except BinanceError as e:
+            if api_code(e) in (-4411, -1121):
+                log.warning("%s: биржа требует соглашения TradFi — символ "
+                            "исключён", sym)
+                if sym in self.symbols:
+                    self.symbols.remove(sym)
+                return
+            raise
         if oid is None:
             # GTX отклонён (цена ушла сквозь) — сигнал «купить сейчас»:
             # исполняемся маркетом, как договорено механикой сигнала
