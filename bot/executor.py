@@ -98,18 +98,19 @@ class Executor:
 
     # ---------- плечо ----------
     def verify_and_set_leverage(self, symbols: list[str]) -> None:
+        lev = int(getattr(self.cfg, "leverage", 3) or 3)
         conf = self.client.rest_api.futures_account_configuration().data()
         conf_d = conf.model_dump(by_alias=True) if hasattr(conf, "model_dump") else {}
         current = {p.get("symbol"): int(p.get("leverage", 0))
                    for p in conf_d.get("positions", [])}
         for s in symbols:
-            if current.get(s) == self.cfg.leverage:
-                self.leverage_set[s] = self.cfg.leverage
+            if current.get(s) == lev:
+                self.leverage_set[s] = lev
                 continue
             try:
                 self.client.rest_api.change_initial_leverage(
-                    symbol=s, leverage=self.cfg.leverage)
-                self.leverage_set[s] = self.cfg.leverage
+                    symbol=s, leverage=lev)
+                self.leverage_set[s] = lev
             except BinanceError as e:
                 code = api_code(e)
                 log.error("плечо %s -> %sx не установлено (код %s): %s",
@@ -246,6 +247,78 @@ class Executor:
         log.info("стоп %s %s @%s id=%s closePos=%s",
                  symbol, side, stop_price, oid, close_pos)
         return int(oid) if oid is not None else None
+
+    def place_market(self, symbol: str, side: str, qty: Decimal,
+                     pos_side: str | None = None) -> int | None:
+        for attempt in range(2):
+            try:
+                kw = dict(symbol=symbol, side=NewOrderSideEnum[side].value,
+                          type=NewOrderTypeEnum["MARKET"].value,
+                          quantity=float(qty))
+                if self.hedge:
+                    kw["position_side"] = pos_side or self._pside(side)
+                r = self.client.rest_api.new_order(**kw)
+                return int(r.data().order_id)
+            except BinanceError as e:
+                if api_code(e) == -1021 and attempt == 0:
+                    import bot.timesync as ts
+                    ts.measure(self.client.rest_api)
+                    continue
+                log.warning("маркет %s %s: %s", symbol, side, e)
+                return None
+        return None
+
+    def query_order_full(self, symbol: str, order_id: int) -> dict | None:
+        for _ in range(3):
+            try:
+                r = self.client.rest_api.query_order(symbol=symbol,
+                                                     order_id=order_id)
+                d = r.data()
+                return d.model_dump(by_alias=True) \
+                    if hasattr(d, "model_dump") else d
+            except BinanceError as e:
+                if api_code(e) == -1021:
+                    import bot.timesync as ts
+                    ts.measure(self.client.rest_api)
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
+
+    def order_book_top(self, symbol: str) -> tuple[float, float] | None:
+        try:
+            r = self.client.rest_api.order_book(symbol=symbol, limit=5).data()
+            d = r.model_dump(by_alias=True) if hasattr(r, "model_dump") else {}
+            return float(d["bids"][0][0]), float(d["asks"][0][0])
+        except Exception as e:
+            log.warning("стакан %s: %s", symbol, e)
+            return None
+
+    def fetch_klines(self, symbol: str, interval: str, limit: int,
+                     end_ms: int | None = None) -> list:
+        kw = dict(symbol=symbol, interval=interval, limit=limit)
+        if end_ms:
+            kw["end_time"] = end_ms
+        try:
+            resp = self.client.rest_api.kline_candlestick_data(**kw)
+            rows = getattr(resp.data(), "root", None) or resp.data()
+            return list(rows)
+        except Exception as e:
+            log.warning("klines %s: %s", symbol, e)
+            return []
+
+    def build_filters(self, symbols: list[str]) -> None:
+        info = self.client.rest_api.exchange_information().data()
+        d = info.model_dump(by_alias=True)
+        from bot.markets import parse_filters
+        for s in d.get("symbols", []):
+            if s.get("symbol") in symbols and s.get("status") == "TRADING":
+                try:
+                    self.filters[s["symbol"]] = parse_filters(s["symbol"],
+                                                              s["filters"])
+                except Exception as e:
+                    log.warning("фильтры %s: %s", s["symbol"], e)
 
     def cancel_order(self, symbol: str, order_id: int) -> bool:
         try:

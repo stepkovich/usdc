@@ -1,0 +1,85 @@
+"""Признаки ML-5Ч: 1:1 с тренировкой (verification/ml_train_baseline.py
+база + ml_step2_groups G-cross). ПАРИТЕТ ЖИВОГО И БЭКТЕСТНОГО РАСЧЁТА
+КРИТИЧЕН — функции копируются, не переписываются."""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+def make_features(df: pd.DataFrame, btc_close, symbol: str) -> pd.DataFrame:
+    """База: признаки из run_ml_honest.py (30м бары)."""
+    close = df["close"]
+    high, low, vol = df["high"], df["low"], df["volume"]
+    tb = df["taker_buy_base"]
+    rets = close.pct_change()
+    out = pd.DataFrame(index=df.index)
+    for h in [1, 4, 10, 20]:
+        out[f"ret_{h}"] = close.pct_change(h)
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(),
+                    (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    out["atr_pct"] = tr.rolling(14).mean() / close
+    out["std_20"] = rets.rolling(20).std()
+    out["vol_ratio"] = vol / vol.rolling(20).mean().replace(0, np.nan)
+    out["taker_buy"] = (tb / vol.replace(0, np.nan)).rolling(
+        20, min_periods=10).mean()
+    rng = (high - low).replace(0, np.nan)
+    out["clv"] = ((close - low) / rng - 0.5).rolling(20, min_periods=10).mean()
+    sma = close.rolling(200, min_periods=50).mean()
+    std = close.rolling(200, min_periods=50).std()
+    out["zscore"] = ((close - sma) / std).replace([np.inf, -np.inf], np.nan)
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    out["rsi"] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+    out["skew"] = rets.rolling(20, min_periods=10).skew()
+    sma50 = close.rolling(50).mean()
+    sma20 = close.rolling(20).mean()
+    out["sma_cross"] = ((close > sma50).astype(float)
+                        - (close > sma20).astype(float))
+    if btc_close is not None and symbol != "BTCUSDT":
+        btc = btc_close.reindex(df.index).ffill()
+        out["btc_ret_10"] = btc.pct_change(10)
+        out["btc_ret_20"] = btc.pct_change(20)
+        out["btc_corr"] = close.rolling(50, min_periods=20).corr(btc)
+    h4 = close.resample("4h").last().dropna()
+    out["h4_momentum"] = h4.pct_change(6).reindex(df.index, method="ffill")
+    ts = pd.to_datetime(df["open_time"], unit="ms")
+    out["hour"] = ts.dt.hour.values
+    out["dow"] = ts.dt.dayofweek.values
+    return out
+
+
+def g_cross(df: pd.DataFrame, btc_close, symbol: str) -> pd.DataFrame:
+    """Группа G-cross (удержана шагом 2): контекст соседей."""
+    close = df["close"]
+    rets = close.pct_change()
+    out = pd.DataFrame(index=df.index)
+    if btc_close is None or symbol == "BTCUSDT":
+        out["rel_ret_20"] = 0.0
+        out["rel_ret_60"] = 0.0
+        out["beta_20"] = 0.0
+        out["corr_20"] = 0.0
+    else:
+        btc = btc_close.reindex(df.index).ffill()
+        bret = btc.pct_change()
+        out["rel_ret_20"] = rets.rolling(20).sum() - bret.rolling(20).sum()
+        out["rel_ret_60"] = rets.rolling(60).sum() - bret.rolling(60).sum()
+        cov = rets.rolling(480).cov(bret)
+        var = bret.rolling(480).var()
+        out["beta_20"] = cov / var.replace(0, np.nan)
+        out["corr_20"] = rets.rolling(480, min_periods=100).corr(bret)
+    return out.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
+def feature_row(df: pd.DataFrame, btc_close, symbol: str,
+                feats: list[str]) -> dict | None:
+    """Последняя ЗАКРЫТАЯ строка признаков (NaN -> None -> пропуск)."""
+    X = make_features(df, btc_close, symbol).replace([np.inf, -np.inf], np.nan)
+    Xg = g_cross(df, btc_close, symbol)
+    for c in Xg.columns:
+        X[c] = Xg[c]
+    last = X.iloc[-2]        # -1 = формирующийся бар, берём -2
+    if last[feats].isna().any():
+        return None
+    return {f: float(last[f]) for f in feats}

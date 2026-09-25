@@ -1,14 +1,14 @@
 services:
-  scalper:
+  unified:
     build: .
-    container_name: usdc
+    container_name: unified
     restart: always            # авторестарт при падении и перезагрузке VPS
-    env_file: .env             # ключи и параметры бота
+    env_file: .env
     volumes:
-      - ./data:/app/data       # журнал сделок и логи переживают пересоздание
+      - ./data:/app/data       # журналы, сделки, данные стакана переживают пересоздание
     stop_grace_period: 30s
     logging:
       driver: json-file
       options:
-        max-size: "1m"
+        max-size: "2m"
         max-file: "3"

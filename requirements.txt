@@ -3,4 +3,5 @@ pydantic==2.13.5
 aiohttp==3.14.3
 numpy
 pandas
-# для SMC-фильтра структуры (bot/structure.py, BOT_SMC_FILTER=1)
+pyarrow
+lightgbm
