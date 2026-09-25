@@ -236,7 +236,6 @@ if __name__ == "__main__":
         fwd = np.full(len(df), np.nan)
         fwd[:-TARGET_HORIZON] = close[TARGET_HORIZON:] / close[:-TARGET_HORIZON] - 1
         y = np.where(np.isnan(fwd), np.nan, (fwd > 0).astype(float))
-        y = y[mask]
         cols_new = {g: group_columns(df, btc_close, sym, g) for g in GROUPS}
         built[sym] = {"df": df, "X_base": X_base, "mask": mask, "y": y,
                       "cols_new": cols_new}
