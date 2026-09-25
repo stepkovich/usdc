@@ -204,7 +204,8 @@ class Strategy:
         stop_price = (avg_price * (1 - self.cfg.stop_atr_mult * p["atr0"]) if side is Side.LONG
                       else avg_price * (1 + self.cfg.stop_atr_mult * p["atr0"]))
         st.position = {"side": side, "qty": qty, "entry": avg_price,
-                       "tp_id": None, "stop_id": None, "tp_price": tp_price}
+                       "tp_id": None, "stop_id": None, "tp_price": tp_price,
+                       "stop_price": stop_price}
         st.pending = None
         cid_tp = f"scr-T-{symbol}-{order_id}"
         cid_stop = f"scr-S-{symbol}-{order_id}"

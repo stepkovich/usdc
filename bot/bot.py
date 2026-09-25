@@ -30,6 +30,7 @@ import bot.telegram as tg
 import bot.timesync as timesync
 from bot.feed import SymbolHistory, Bar
 from bot.structure import Structure15m
+from bot.vpvr import breakout_ok
 from bot.strategy import (
     CancelEntry,
     CancelExit,
@@ -48,7 +49,8 @@ log = logging.getLogger("bot")
 
 class _TfView:
     """TF-история с минутным ATR: donchian/bars из TF-баров,
-    atr_frac — из минутной истории (стоп-дистанция как в бэктесте)."""
+    atr_frac — из минутной истории (стоп-дистанция как в бэктесте),
+    adx — Wilder по TF-барам (окно в TF-барах)."""
 
     def __init__(self, symbol: str, h_tf, h_1m):
         self.symbol = symbol
@@ -63,6 +65,10 @@ class _TfView:
     @property
     def atr_frac(self):
         return self._m.atr_frac
+
+    @property
+    def adx(self):
+        return self._tf.adx
 
     def donchian(self):
         return self._tf.donchian()
@@ -109,6 +115,14 @@ class Bot:
         self._day_start_ms = int(datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
         self._pnl_check_counter = 0
+        
+        # ---- ПАКЕТ A: Риск-контур ----
+        # consecutive stops по направлениям
+        self.consecutive_stops: dict[str, int] = {"LONG": 0, "SHORT": 0}
+        self.consecutive_locked: dict[str, bool] = {"LONG": False, "SHORT": False}
+        # DD-guard: пик equity для отслеживания просадки
+        self._equity_peak: Decimal = self.balance_snapshot or Decimal(0)
+        self.dd_guard_locked: bool = False
         self._user_conn = None
         self._listen_key_task: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
@@ -148,7 +162,7 @@ class Bot:
         if cfg.tf_min > 1:
             wtf = max(8, self.cfg.donchian_bars // cfg.tf_min + 1)
             for s in self.symbols:
-                self.tf_hist[s] = SymbolHistory(s, wtf)
+                self.tf_hist[s] = SymbolHistory(s, wtf, adx_window=cfg.adx_window)
                 self.tf_buf[s] = []
         log.info("режим=%s пар=%d исполнение=%s рынок=%s",
                  cfg.mode.value, len(self.symbols), cfg.exec_rest_url,
@@ -210,6 +224,65 @@ class Bot:
                                 self.ledger.event("regime_gate_skip", a.symbol,
                                                   {"side": a.side.value, "regime": self.regime})
                                 self.strategy.state(a.symbol).pending = None
+                                continue
+                        # ---- ПАКЕТ A: Риск-контур ----
+                        # DD-guard: портфельная просадка от пика
+                        if self.cfg.dd_guard_pct > 0 and self.balance_snapshot:
+                            equity_now = self.balance_snapshot + self.daily_total_pnl
+                            if equity_now > self._equity_peak:
+                                self._equity_peak = equity_now
+                            dd = (self._equity_peak - equity_now) / self._equity_peak
+                            if dd >= self.cfg.dd_guard_pct and not self.dd_guard_locked:
+                                self.dd_guard_locked = True
+                                log.warning("DD-GUARD: просадка %.2f%% >= %.2f%% — ВСЕ НОВЫЕ ВХОДЫ ЗАПРЕЩЕНЫ",
+                                            dd * 100, self.cfg.dd_guard_pct * 100)
+                                self.ledger.event("dd_guard_hit", "", {
+                                    "drawdown_pct": round(float(dd) * 100, 2),
+                                    "threshold_pct": round(float(self.cfg.dd_guard_pct) * 100, 2),
+                                    "equity_peak": str(self._equity_peak),
+                                    "equity_now": str(equity_now)})
+                            if self.dd_guard_locked:
+                                log.warning("%s: сигнал пропущен — DD-guard активен (просадка %.2f%%)",
+                                            a.symbol, dd * 100)
+                                self.ledger.event("dd_guard_skip", a.symbol, {})
+                                self.strategy.state(a.symbol).pending = None
+                                continue
+                        # consecutive stops: серия стопов по направлению -> кулдаун
+                        if self.cfg.max_consecutive_stops > 0 and \
+                                self.consecutive_locked.get(a.side.value):
+                            log.warning("%s: сигнал %s пропущен — серия стопов %d/%d, кулдаун",
+                                        a.symbol, a.side.value,
+                                        self.consecutive_stops[a.side.value],
+                                        self.cfg.max_consecutive_stops)
+                            self.ledger.event("consecutive_stops_skip", a.symbol,
+                                              {"side": a.side.value,
+                                               "count": self.consecutive_stops[a.side.value]})
+                            self.strategy.state(a.symbol).pending = None
+                            continue
+                        # ---- ПАКЕТ C: фильтр фандингового окна ----
+                        # Фандинг USDC-M бьёт на границах 00/08/16 UTC (у
+                        # меньшинства пар 4ч — гейт тогда сработает чаще,
+                        # консервативно). Вокруг границы жгут спред/вилки:
+                        # новые входы в окне funding_guard_min минут пропускаем.
+                        if self.cfg.funding_guard_min > 0:
+                            now = datetime.now(timezone.utc)
+                            mins = now.hour * 60 + now.minute
+                            in_window = False
+                            for boundary_h in (0, 8, 16):
+                                b = boundary_h * 60
+                                d = min(abs(mins - b), 1440 - abs(mins - b))
+                                if d <= self.cfg.funding_guard_min:
+                                    in_window = True
+                                    log.info("%s: сигнал пропущен — фандинг-"
+                                             "окно (%d мин до границы %02d:00)",
+                                             a.symbol, d, boundary_h)
+                                    self.ledger.event("funding_guard_skip",
+                                                      a.symbol,
+                                                      {"side": a.side.value,
+                                                       "mins_to_boundary": d})
+                                    self.strategy.state(a.symbol).pending = None
+                                    break
+                            if in_window:
                                 continue
                         # направленный дневной лимит убытка
                         if self.cfg.daily_loss_pct > 0 and \
@@ -280,7 +353,14 @@ class Bot:
                         oid = await asyncio.to_thread(
                             self.exec.place_entry_limit, a.symbol,
                             "BUY" if a.side.value == "LONG" else "SELL", price, qty,
-                            a.client_id)
+                            a.client_id, post_only=self.cfg.maker_entry)
+                        if oid is None:
+                            # GTX отклонён (-4131): цена уже за уровнем — вход
+                            # тейкером запрещён, сигнал пропускаем
+                            self.ledger.event("entry_gtx_cross_skip", a.symbol, {
+                                "side": a.side.value, "level": str(a.level)})
+                            self.strategy.state(a.symbol).pending = None
+                            continue
                         self.strategy.entry_placed(a.symbol, oid or 0, qty)
                     case CancelEntry():
                         self.ledger.event("cancel_entry", a.symbol,
@@ -371,11 +451,17 @@ class Bot:
                             log.info("%s: rearm отменён — состояние заявки "
                                      "изменилось", a.symbol)
                             continue
-                        # 3) новая заявка на свежем уровне
+                        # 3) новая заявка на свежем уровне (тоже post-only)
                         oid = await asyncio.to_thread(
                             self.exec.place_entry_limit, a.symbol,
                             "BUY" if a.side.value == "LONG" else "SELL", price, qty,
-                            a.client_id)
+                            a.client_id, post_only=self.cfg.maker_entry)
+                        if oid is None:
+                            self.ledger.event("rearm_entry", a.symbol,
+                                              {"result": "gtx_cross_skip",
+                                               "old_order_id": a.old_order_id})
+                            st2.pending = None
+                            continue
                         # 4) гонка: старая могла исполниться, ПОКА мы ставили
                         # новую (fill-событие обнуляет pending). Тогда новую
                         # заявку немедленно гасим — позиции быть не должно.
@@ -571,8 +657,40 @@ class Bot:
                     dur_h = (time.time() - acc.get("entry_ts", time.time())) / 3600
                     if exit_kind == "tp":
                         tg.fire(f"✅ <b>TP {sym}</b> {exit_pnl:+.2f} USDC ({dur_h:.1f} ч)")
+                        # TP сбрасывает серию стопов по этому направлению
+                        if self.cfg.max_consecutive_stops > 0 and d_side:
+                            if self.consecutive_stops[d_side] > 0:
+                                log.info("%s: TP — сброс серии стопов %s (было %d)",
+                                         sym, d_side, self.consecutive_stops[d_side])
+                            self.consecutive_stops[d_side] = 0
+                            self.consecutive_locked[d_side] = False
                     else:
                         tg.fire(f"🔴 <b>СТОП {sym}</b> {exit_pnl:+.2f} USDC ({dur_h:.1f} ч)")
+                        # Стоп увеличивает счётчик серии
+                        if self.cfg.max_consecutive_stops > 0 and d_side:
+                            self.consecutive_stops[d_side] += 1
+                            log.info("%s: стоп %s — серия %d/%d",
+                                     sym, d_side, self.consecutive_stops[d_side],
+                                     self.cfg.max_consecutive_stops)
+                            if self.consecutive_stops[d_side] >= self.cfg.max_consecutive_stops:
+                                self.consecutive_locked[d_side] = True
+                                # ставим кулдаун в стратегии на все символы этого направления
+                                for s, st in self.strategy.states.items():
+                                    if not st.position:
+                                        st.cooldown_until = max(
+                                            st.cooldown_until,
+                                            st.bars_seen + self.cfg.consecutive_cooldown_bars)
+                                self.ledger.event("consecutive_stops_hit", sym,
+                                                  {"side": d_side,
+                                                   "count": self.consecutive_stops[d_side],
+                                                   "cooldown_bars": self.cfg.consecutive_cooldown_bars})
+                                tg.fire(f"⛔ <b>СЕРИЯ СТОПОВ {d_side}</b>: "
+                                        f"{self.consecutive_stops[d_side]}/{self.cfg.max_consecutive_stops} — "
+                                        f"кулдаун {self.cfg.consecutive_cooldown_bars} баров")
+                                log.warning("СЕРИЯ СТОПОВ %s: %d/%d — кулдаун %d баров",
+                                            d_side, self.consecutive_stops[d_side],
+                                            self.cfg.max_consecutive_stops,
+                                            self.cfg.consecutive_cooldown_bars)
                     acts = self.strategy.exit_filled(sym, exit_kind)
                     await self.apply(acts)
             self.ledger.event("user_event", "", {"e": ev})
@@ -587,17 +705,27 @@ class Bot:
         self._day_start_ms = int(datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
         had = (self.daily_pnl["LONG"] or self.daily_pnl["SHORT"]
-               or self.daily_locked["LONG"] or self.daily_locked["SHORT"])
+               or self.daily_locked["LONG"] or self.daily_locked["SHORT"]
+               or self.consecutive_stops["LONG"] or self.consecutive_stops["SHORT"]
+               or self.consecutive_locked["LONG"] or self.consecutive_locked["SHORT"]
+               or self.dd_guard_locked)
         if had:
             log.info("суточный сброс (00:00 UTC): счётчики обнулены "
-                     "(было: LONG %s, SHORT %s, блокировки %s/%s)",
+                     "(было: LONG %s, SHORT %s, блокировки %s/%s, серии стопов %s/%s, DD-guard %s)",
                      self.daily_pnl["LONG"].quantize(Decimal("0.01")),
                      self.daily_pnl["SHORT"].quantize(Decimal("0.01")),
-                     self.daily_locked["LONG"], self.daily_locked["SHORT"])
+                     self.daily_locked["LONG"], self.daily_locked["SHORT"],
+                     self.consecutive_stops["LONG"], self.consecutive_stops["SHORT"],
+                     self.dd_guard_locked)
         self.daily_pnl = {"LONG": Decimal(0), "SHORT": Decimal(0)}
         self.daily_locked = {"LONG": False, "SHORT": False}
         self.daily_total_pnl = Decimal(0)
         self.daily_total_locked = False
+        self.consecutive_stops = {"LONG": 0, "SHORT": 0}
+        self.consecutive_locked = {"LONG": False, "SHORT": False}
+        self.dd_guard_locked = False
+        # пик equity НЕ сбрасываем — DD-guard работает на всем периоде жизни бота
+        # (если нужен сброс пика — добавим отдельный флаг)
 
     def _refresh_locks(self) -> None:
         """Пересчёт блокировок направленного дневного лимита по текущим цифрам."""
@@ -740,7 +868,13 @@ class Bot:
             self.exits.setdefault(sym, {})["tp"] = oid
             if st.position:
                 st.position["tp_id"] = oid
-        if not any(str(a.get("clientAlgoId", "")).startswith("scr-S") for a in algo):
+        # защита есть, если algo-стоп на бирже ИЛИ висит лимитка-спасатель
+        # (maker-стоп снимает algo и ставит лимитку scr-S-*-rescue)
+        protected = (any(str(a.get("clientAlgoId", "")).startswith("scr-S")
+                         for a in algo)
+                     or any(str(o.get("clientOrderId", "")).startswith("scr-S")
+                            for o in orders))
+        if not protected:
             atr = (self.feed.hist[sym].atr_frac
                    if sym in self.feed.hist and self.feed.hist[sym].ready
                    else Decimal("0.001"))
@@ -755,6 +889,85 @@ class Bot:
             self.exits.setdefault(sym, {})["stop"] = oid
             if st.position:
                 st.position["stop_id"] = oid
+                st.position["stop_price"] = stop_px
+
+    async def stop_rescuer(self) -> None:
+        """ПАКЕТ B: maker-стоп. Пока цена НЕ дошла до стопа, обычный
+        STOP_MARKET висит на бирже. Когда цена подходит к стопу ближе
+        maker_stop_trigger_bps — algo-стоп отменяется и вместо него ставится
+        закрывающая ЛИМИТКА на стоп-цене: если цена затронет уровень —
+        закрытие мейкером (комиссия 0 вместо тейкерской). Если цена
+        проскочила стоп на maker_stop_fallback_bps без исполнения — лимитка
+        отменяется и ставится обычный STOP_MARKET (маркет-фолбэк).
+        Клиент-id лимитки scr-S-*: события идут в учёт как стоп-выход."""
+        if not self.cfg.maker_stop:
+            return
+        while not self._stop.is_set():
+            try:
+                await asyncio.sleep(2)
+                if self.cfg.dry_run:
+                    continue
+                trig = Decimal(self.cfg.maker_stop_trigger_bps) / Decimal(10000)
+                fb = Decimal(self.cfg.maker_stop_fallback_bps) / Decimal(10000)
+                for sym, st in list(self.strategy.states.items()):
+                    pos = st.position
+                    if not pos or not pos.get("stop_price"):
+                        continue
+                    ex = self.exits.setdefault(sym, {})
+                    side = pos["side"]                       # сторона ПОЗИЦИИ
+                    exit_side = "SELL" if side == "LONG" else "BUY"
+                    stop_px = pos["stop_price"]
+                    book = self.feed.book.get(sym)
+                    if not book or book[0] <= 0 or book[1] <= 0:
+                        continue
+                    bid, ask = book
+                    rescue_oid = ex.get("rescue")
+                    # 1)cleanup: позиции нет, а лимитка-спасатель висит -> гасим
+                    if rescue_oid and not pos:
+                        await asyncio.to_thread(self.exec.cancel_order,
+                                                sym, rescue_oid)
+                        ex["rescue"] = None
+                        continue
+                    if not pos:
+                        continue
+                    if side == "LONG":
+                        near = ask <= stop_px * (1 + trig)
+                        through = bid < stop_px * (1 - fb)
+                    else:
+                        near = bid >= stop_px * (1 - trig)
+                        through = ask > stop_px * (1 + fb)
+                    if near and not rescue_oid and not through:
+                        # 2) цена подошла к стопу: algo-стоп -> лимитка на стоп-цене
+                        algo_id = ex.get("stop")
+                        if algo_id:
+                            await asyncio.to_thread(self.exec.cancel_algo_order,
+                                                    sym, algo_id)
+                        ex["stop"] = None
+                        oid = await asyncio.to_thread(
+                            self.exec.place_tp_limit, sym, exit_side, stop_px,
+                            pos["qty"], f"scr-S-{sym}-rescue", pos_side=side)
+                        ex["rescue"] = oid
+                        self.ledger.event("maker_stop_rescue", sym, {
+                            "side": side, "stop_price": str(stop_px),
+                            "order_id": oid or 0})
+                        log.info("%s: maker-стоп — лимитка %s на стоп-цене %s "
+                                 "(algo-стоп снят)", sym, oid, stop_px)
+                    elif through and rescue_oid:
+                        # 3) цена проскочила стоп, лимитка не взяла -> маркет-фолбэк
+                        await asyncio.to_thread(self.exec.cancel_order,
+                                                sym, rescue_oid)
+                        ex["rescue"] = None
+                        oid = await asyncio.to_thread(
+                            self.exec.place_stop_market, sym, exit_side,
+                            stop_px, f"scr-S-{sym}-fb")
+                        ex["stop"] = oid
+                        self.ledger.event("maker_stop_fallback", sym, {
+                            "side": side, "stop_price": str(stop_px),
+                            "order_id": oid or 0})
+                        log.warning("%s: maker-стоп не взяли — фолбэк на "
+                                    "STOP_MARKET id=%s", sym, oid)
+            except Exception:
+                log.exception("stop_rescuer")
 
     async def send_hourly_report(self) -> None:
         """Почасовой отчёт в Telegram: чистый PnL дня и за всё время, позиции.
@@ -1022,7 +1235,8 @@ class Bot:
                     bar_tf = Bar(buf[0].open_time, buf[0].open,
                                  max(b.high for b in buf),
                                  min(b.low for b in buf),
-                                 buf[-1].close, closed=True)
+                                 buf[-1].close, closed=True,
+                                 volume=sum(b.volume for b in buf))
                     self.tf_buf[s] = []
                     self.tf_hist[s].push_closed(bar_tf)
             await asyncio.sleep(0.3)
@@ -1047,7 +1261,8 @@ class Bot:
         await self.feed.start_streams(self.symbols)
         await self.start_user_stream()
         self._tasks = [asyncio.create_task(self.reconciler()),
-                       asyncio.create_task(self.watchdog())]
+                       asyncio.create_task(self.watchdog()),
+                       asyncio.create_task(self.stop_rescuer())]
         log.info("бот запущен: пары=%d dry_run=%s цель=%s", len(self.symbols),
                  self.cfg.dry_run, self.cfg.target_pct)
         bars_seen = 0
@@ -1071,7 +1286,8 @@ class Bot:
                 buf = self.tf_buf[sym]
                 bar = Bar(buf[0].open_time, buf[0].open,
                           max(b.high for b in buf), min(b.low for b in buf),
-                          buf[-1].close, closed=True)
+                          buf[-1].close, closed=True,
+                          volume=sum(b.volume for b in buf))
                 self.tf_buf[sym] = []
                 self.tf_hist[sym].push_closed(bar)
                 h = _TfView(sym, self.tf_hist[sym], h)
@@ -1091,6 +1307,47 @@ class Bot:
                                 log.warning("%s: SMC-фильтр — вход %s против "
                                             "структуры %s пропущен", sym,
                                             a.side.value, bias)
+                                continue
+                        kept.append(a)
+                    acts = kept
+                # ПАКЕТ C: ADX-фильтр — не входить в CHOP (ADX ниже порога)
+                if acts and self.cfg.adx_filter and sym in self.symbols:
+                    adx = getattr(h, "adx", None)
+                    thr = float(self.cfg.adx_threshold)
+                    if adx is None or adx < thr:
+                        kept = []
+                        for a in acts:
+                            if isinstance(a, PlaceEntry):
+                                self.strategy.state(sym).pending = None
+                                self.ledger.event("adx_skip", sym, {
+                                    "side": a.side.value,
+                                    "adx": None if adx is None else round(adx, 1),
+                                    "threshold": thr})
+                                log.info("%s: ADX-фильтр — ADX=%s < %s, вход "
+                                         "%s пропущен", sym,
+                                         None if adx is None else round(adx, 1),
+                                         thr, a.side.value)
+                                continue
+                            kept.append(a)
+                        acts = kept
+                # ПАКЕТ C: VPVR-фильтр (кандидат, выключен по умолчанию) —
+                # не входить пробоем в плотный объём (HVN-стена)
+                if acts and self.cfg.vpvr_filter and sym in self.symbols:
+                    kept = []
+                    for a in acts:
+                        if isinstance(a, PlaceEntry):
+                            h1m = self.feed.hist.get(sym)
+                            ok, info = (True, {"zone": "no_hist"})
+                            if h1m is not None and h1m.bars:
+                                ok, info = breakout_ok(h1m.bars, a.price,
+                                                       a.side.value)
+                            if not ok:
+                                self.strategy.state(sym).pending = None
+                                self.ledger.event("vpvr_skip", sym, {
+                                    "side": a.side.value, **info})
+                                log.info("%s: VPVR-фильтр — пробой в зоне %s, "
+                                         "вход %s пропущен", sym, info.get("zone"),
+                                         a.side.value)
                                 continue
                         kept.append(a)
                     acts = kept

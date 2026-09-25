@@ -133,17 +133,32 @@ class Executor:
 
     # ---------- ордера ----------
     def place_entry_limit(self, symbol: str, side: str, price: Decimal,
-                          qty: Decimal, client_id: str) -> int | None:
-        r = self.client.rest_api.new_order(
-            symbol=symbol,
-            side=NewOrderSideEnum[side].value,
-            type=NewOrderTypeEnum["LIMIT"].value,
-            position_side=self._pside(side),
-            time_in_force=NewOrderTimeInForceEnum["GTC"].value,
-            quantity=float(qty), price=float(price),
-            new_client_order_id=client_id)
+                          qty: Decimal, client_id: str,
+                          post_only: bool = False) -> int | None:
+        """Входная лимитка. post_only=True -> GTX: биржа ОТКЛОНИТ заявку,
+        если она сразу исполнилась бы как тейкер (-4131), — тогда вернём None.
+        Так вход гарантированно мейкерский (на USDC-M мейкер = 0 по промо)."""
+        tif = "GTX" if post_only else "GTC"
+        try:
+            r = self.client.rest_api.new_order(
+                symbol=symbol,
+                side=NewOrderSideEnum[side].value,
+                type=NewOrderTypeEnum["LIMIT"].value,
+                position_side=self._pside(side),
+                time_in_force=NewOrderTimeInForceEnum[tif].value,
+                quantity=float(qty), price=float(price),
+                new_client_order_id=client_id)
+        except BinanceError as e:
+            if post_only and api_code(e) == -4131:
+                # would immediately cross: цена уже прошла наш уровень —
+                # вход тейкером не делаем (сигнал устарел)
+                log.info("%s: GTX-вход отклонён (-4131 would cross) — цена уже "
+                         "за уровнем, пропускаем", symbol)
+                return None
+            raise
         oid = int(r.data().order_id)
-        log.info("заявка %s %s %s @%s id=%s", symbol, side, qty, price, oid)
+        log.info("заявка %s %s %s @%s id=%s (tif=%s)", symbol, side, qty, price,
+                 oid, tif)
         return oid
 
     def place_tp_limit(self, symbol: str, side: str, price: Decimal,

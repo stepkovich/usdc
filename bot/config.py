@@ -43,14 +43,18 @@ MARKET_REST_URL = DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL
 
 def load_dotenv(path: Path) -> None:
     """Файл .env обязателен только локально; в Docker переменные приходят
-    через env_file compose прямо в окружение — файла может не быть."""
+    через env_file compose прямо в окружение — файла может не быть.
+    Инлайн-комментарии после значения («KEY=val  # пояснение») отрезаются:
+    без этого Decimal(os.environ[...]) падает на ConversionSyntax."""
     if not path.exists():
         return
+    import re
     for line in path.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip())
+            v = re.split(r"\s+#", v.strip(), maxsplit=1)[0].strip()
+            os.environ.setdefault(k.strip(), v)
 
 
 class BotConfig(BaseModel):
@@ -74,12 +78,34 @@ class BotConfig(BaseModel):
     notional_buffer: Decimal = Decimal("1.1")  # пол = minNotional монеты x буфер
     daily_loss_pct: Decimal = Decimal("0.02")  # дневной лимит убытка НА НАПРАВЛЕНИЕ
     total_daily_loss_pct: Decimal = Decimal("0.03")  # общий дневной кап на ОБЕ стороны
+    
+    # ---- ПАКЕТ A: Риск-контур (DD-guard, consecutive stops) ----
+    dd_guard_pct: Decimal = Decimal("0.20")    # портфельный MaxDD 20% -> полная остановка входов
+    max_consecutive_stops: int = 3             # стопов подряд -> кулдаун
+    consecutive_cooldown_bars: int = 60        # баров кулдауна после серии стопов
+    
     leverage: int = 20                         # запас до ликвидации > 2x худшего стопа
     dry_run: bool = False                      # True: сигналы только в журнал
     rearm: bool = False                        # перестановка заявки на новый экстремум
     smc_filter: bool = False                   # SMC-фильтр: не входить против структуры 15м
     tf_min: int = 1                            # зернистость торговых свечей (1=минутки)
     regime_gate: bool = False                  # гейт по режиму BTC(30д): лонги в быке, шорты в медведе
+    
+    # ---- ПАКЕТ B: Maker-исполнение ----
+    maker_entry: bool = True                   # вход post-only GTX с re-peg/таймаутом
+    maker_entry_repeg_bps: int = 2             # смещение цены при реквоте (bps)
+    maker_entry_max_repeg: int = 5             # макс. попыток реквота
+    maker_entry_ttl_sec: int = 180             # TTL лимитки входа (сек)
+    maker_stop: bool = True                    # стоп: сначала лимитка, потом маркет
+    maker_stop_trigger_bps: int = 2            # за сколько bps до стопа ставим лимитку
+    maker_stop_fallback_bps: int = 2           # если лимитка не исполнилась за bps -> маркет
+    
+    # ---- ПАКЕТ C: Фильтры качества входа ----
+    funding_guard_min: int = 5                 # не входить за N минут до/после фандинга
+    adx_filter: bool = True                    # ADX-фильтр: не входить в CHOP (ADX<20)
+    adx_window: int = 14                       # окно ADX (минутных баров)
+    adx_threshold: Decimal = Decimal("20")     # порог ADX для тренда
+    vpvr_filter: bool = False                  # VPVR фильтр (требует тиковых данных)
 
     # учёт «как будто комиссии нет» (ваш тариф) + реальность демо
     assume_maker_fee: Decimal = Decimal("0")       # тариф: мейкер 0
@@ -113,6 +139,10 @@ class BotConfig(BaseModel):
             notional_buffer=Decimal(os.environ.get("BOT_NOTIONAL_BUFFER", "1.1")),
             daily_loss_pct=Decimal(os.environ.get("BOT_DAILY_LOSS_PCT", "0.02")),
             total_daily_loss_pct=Decimal(os.environ.get("BOT_TOTAL_DAILY_LOSS_PCT", "0.03")),
+            # ПАКЕТ A: Риск-контур
+            dd_guard_pct=Decimal(os.environ.get("BOT_DD_GUARD_PCT", "0.20")),
+            max_consecutive_stops=int(os.environ.get("BOT_MAX_CONSECUTIVE_STOPS", "3")),
+            consecutive_cooldown_bars=int(os.environ.get("BOT_CONSECUTIVE_COOLDOWN_BARS", "60")),
             leverage=int(os.environ.get("BOT_LEVERAGE", "20")),
             dry_run=os.environ.get("BOT_DRY_RUN", "1") == "1",
             rearm=os.environ.get("BOT_REARM", "0") == "1",
@@ -120,6 +150,20 @@ class BotConfig(BaseModel):
             tf_min=int(os.environ.get("BOT_TF_MIN", "1")),
             donchian_bars=int(os.environ.get("BOT_DONCHIAN_BARS", "480")),
             regime_gate=os.environ.get("BOT_REGIME_GATE", "0") == "1",
+            # ПАКЕТ B: Maker-исполнение
+            maker_entry=os.environ.get("BOT_MAKER_ENTRY", "1") == "1",
+            maker_entry_repeg_bps=int(os.environ.get("BOT_MAKER_ENTRY_REPEG_BPS", "2")),
+            maker_entry_max_repeg=int(os.environ.get("BOT_MAKER_ENTRY_MAX_REPEG", "5")),
+            maker_entry_ttl_sec=int(os.environ.get("BOT_MAKER_ENTRY_TTL_SEC", "180")),
+            maker_stop=os.environ.get("BOT_MAKER_STOP", "1") == "1",
+            maker_stop_trigger_bps=int(os.environ.get("BOT_MAKER_STOP_TRIGGER_BPS", "2")),
+            maker_stop_fallback_bps=int(os.environ.get("BOT_MAKER_STOP_FALLBACK_BPS", "2")),
+            # ПАКЕТ C: Фильтры
+            funding_guard_min=int(os.environ.get("BOT_FUNDING_GUARD_MIN", "5")),
+            adx_filter=os.environ.get("BOT_ADX_FILTER", "1") == "1",
+            adx_window=int(os.environ.get("BOT_ADX_WINDOW", "14")),
+            adx_threshold=Decimal(os.environ.get("BOT_ADX_THRESHOLD", "20")),
+            vpvr_filter=os.environ.get("BOT_VPVR_FILTER", "0") == "1",
         )
         if os.environ.get("BOT_SYMBOLS"):
             cfg.symbols = [s.strip().upper()
