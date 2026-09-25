@@ -51,7 +51,7 @@ class Ml5hEngine:
     async def setup(self) -> None:
         meta = json.loads(self.c.meta_path.read_text())
         self.feats = meta["features"]
-        self.symbols = self.cfg.symbols or meta["symbols"]
+        self.symbols = self.c.symbols or meta["symbols"]
         self.model = lgb.Booster(model_file=str(self.c.model_path))
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
