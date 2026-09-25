@@ -56,10 +56,16 @@ class Ml5hEngine:
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
                  meta.get("gate", self.c.gate))
+        # биржа — источник правды: символы, которых нет на демо, отсеиваем
+        await asyncio.to_thread(self.ex.build_filters, self.symbols)
+        live = [s for s in self.symbols if s in self.ex.filters]
+        for s in self.symbols:
+            if s not in live:
+                log.warning("%s: нет на демо-бирже — исключён", s)
+        self.symbols = live
         await asyncio.to_thread(self.ex.verify_and_set_leverage, self.symbols)
         for s in self.symbols:
             await asyncio.to_thread(self.ex.setup_symbol, s)
-        await asyncio.to_thread(self.ex.build_filters, self.symbols)
         self.balance = await asyncio.to_thread(
             self.ex.account_wallet_balance, "USDT")
         await self._warmup()
