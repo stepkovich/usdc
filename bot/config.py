@@ -79,7 +79,7 @@ class LobConfig(BaseModel):
     hold_s: int = 300
     row_ms: int = 500                # частота пачек биржи — пишем каждую
     hot_hours: int = 6
-    archive_days: int = 3
+    archive_days: int = 2
     first_train_h: int = 6           # часов данных до первой тренировки
     retrain_at_utc: tuple[int, int] = (0, 15)
     risk_pct: Decimal = Decimal("0.0015")
