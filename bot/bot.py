@@ -86,7 +86,7 @@ class Bot:
         self.feed = MarketFeed(cfg)
         self.regime = None                    # up | down | None (боковик/прогрев)
         if getattr(self, 'tf_hist', None) is None and cfg.tf_min > 1:
-            wtf = max(8, self.cfg.atr_window // cfg.tf_min + 1)
+            wtf = max(8, self.cfg.donchian_bars // cfg.tf_min + 1)
             self.tf_hist = {}
             self.tf_buf = {}
             cfg.wait_bars = max(1, cfg.wait_bars // cfg.tf_min)
@@ -146,7 +146,7 @@ class Bot:
         self.tf_hist: dict = {}
         self.tf_buf: dict = {}
         if cfg.tf_min > 1:
-            wtf = max(8, self.cfg.atr_window // cfg.tf_min + 1)
+            wtf = max(8, self.cfg.donchian_bars // cfg.tf_min + 1)
             for s in self.symbols:
                 self.tf_hist[s] = SymbolHistory(s, wtf)
                 self.tf_buf[s] = []
