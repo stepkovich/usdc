@@ -185,7 +185,7 @@ class LobBot:
                 d = p.model_dump(by_alias=True) if hasattr(p, "model_dump") else p
                 sym = d.get("symbol")
                 amt = Decimal(str(d.get("positionAmt", "0")))
-                if sym in SYMS and amt != 0:
+                if sym in self.SYMS and amt != 0:
                     live[sym] = d
             for sym, d in live.items():
                 if sym in self.pos or sym in self.pending:
