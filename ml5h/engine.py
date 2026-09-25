@@ -187,7 +187,9 @@ class Ml5hEngine:
         tick = float(df["close"].iloc[-1]) * 0  # цена — с биржи, не из баров
         qty = self.qty_for(sym, Decimal(str(bb)))
         if qty <= 0:
-            log.warning("%s: лот не сошёлся", sym)
+            log.warning("%s: лот не сошёлся — символ исключён", sym)
+            if sym in self.symbols:
+                self.symbols.remove(sym)
             return
         try:
             oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
