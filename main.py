@@ -89,7 +89,7 @@ async def main() -> None:
         lob = LobBot(cfg, ex)
         await asyncio.to_thread(lob.setup)
         lob.try_load_model()
-        tasks.append(asyncio.create_task(lob_recorder.run(cfg.lob.symbols)))
+        tasks.append(asyncio.create_task(lob_recorder.run(lob.SYMS)))
         tasks.append(lob.run_loop())
         log.info("СТАКАН: %d символов USDC", len(lob.SYMS))
     tasks.append(hourly_report(cfg, ml5h, lob))
