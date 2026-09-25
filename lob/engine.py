@@ -357,7 +357,14 @@ class LobBot:
             if r.returncode == 0 and MODEL.exists():
                 import lightgbm as lgb
                 self.model = lgb.Booster(model_file=str(MODEL))
+                import bot.telegram as tg
+                tg.fire("🧠 <b>Стакан</b>: ночное переобучение прошло, "
+                        "модель обновлена")
                 log.info("модель обновлена")
+            else:
+                import bot.telegram as tg
+                tg.fire("⚠️ <b>Стакан</b>: ночное переобучение не удалось — "
+                        "работаем на предыдущей модели")
         except Exception as e:
             log.warning("переобучение не удалось: %s", e)
 

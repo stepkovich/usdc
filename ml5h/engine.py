@@ -118,6 +118,9 @@ class Ml5hEngine:
                 import lightgbm as lgb
                 self.model = lgb.Booster(model_file=str(self.c.model_path))
                 self._model_loaded_mtime = mt
+                import bot.telegram as tg
+                tg.fire("🧠 <b>ML-5ч</b>: новая модель получена и "
+                        "подхвачена без рестарта")
                 log.info("модель перезагружена (обновлена %s)",
                          datetime.fromtimestamp(mt, timezone.utc)
                          .strftime("%H:%M UTC"))
