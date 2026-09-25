@@ -1,60 +1,64 @@
-"""Загрузка 30м истории ВСЕХ живых USDT-перпетуалов с мейннета.
+"""Загрузка 30м истории ВСЕХ живых USDT-перпетуалов (asyncio gather).
 
-ПАЦИЕНТСКОЕ скачивание (урок бана по IP за 12 параллельных соединений):
-- один запрос за раз, пауза 0.35с между запросами;
-- глубина: 2 года (walk-forward хватит);
-- кэш: data_cache_30m/<SYM>_30m.csv, докачивается с места остановки.
+Урок бана: параллелизм БЕЗ темпа = бан. Здесь наоборот: до 8 задач в
+полёте (скрывают сетевые задержки), но старт каждого запроса зажат
+общим замком — не быстрее ~3.2 запроса/сек = ~1900 весовых единиц/мин
+при лимите биржи 2400. Кэш: data_cache_30m/<SYM>_30m.csv, докачивается
+с места остановки.
 Запуск в фоне: nohup python3 ops/download_panel_30m.py &
 """
 from __future__ import annotations
 
-import sys
+import asyncio
 import time
 from pathlib import Path
 
-import requests
+import aiohttp
 
 OUT = Path("/home/iek/PycharmProjects/USDC/data_cache_30m")
-PAUSE_S = 0.35
+PACE_S = 0.52
+MAX_INFLIGHT = 8
 YEARS_BACK = 2
 BASE = "https://fapi.binance.com"
 
+_next_start = [0.0]
+_pace_lock = asyncio.Lock()
 
-def get(url, params=None):
-    for attempt in range(5):
+
+async def paced_get(session, url, params):
+    """Запрос с глобальным темпом + ретраи на 429/418."""
+    async with _pace_lock:
+        now = time.monotonic()
+        wait = max(0.0, _next_start[0] - now)
+        _next_start[0] = max(now, _next_start[0]) + PACE_S
+    if wait > 0:
+        await asyncio.sleep(wait)
+    for attempt in range(6):
         try:
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code == 418 or r.status_code == 429:
-                wait = 90 if r.status_code == 418 else 30
-                print(f"лимит ({r.status_code}), пауза {wait}с", flush=True)
-                time.sleep(wait)
-                continue
-            r.raise_for_status()
-            return r.json()
+            async with session.get(url, params=params,
+                                   timeout=aiohttp.ClientTimeout(total=25)) as r:
+                if r.status in (418, 429):
+                    pause = 90 if r.status == 418 else 30
+                    print(f"лимит ({r.status}), пауза {pause}с", flush=True)
+                    await asyncio.sleep(pause)
+                    continue
+                r.raise_for_status()
+                return await r.json()
         except Exception as e:
             print("retry:", e, flush=True)
-            time.sleep(5)
+            await asyncio.sleep(3)
     return None
 
 
-def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    info = get(f"{BASE}/fapi/v1/exchangeInfo") or []
-    syms = sorted(s["symbol"] for s in info.get("symbols", [])
-                  if s.get("contractType") == "PERPETUAL"
-                  and s.get("status") == "TRADING"
-                  and s.get("symbol", "").endswith("USDT"))
-    print(f"перпетуалов USDT: {len(syms)}", flush=True)
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - YEARS_BACK * 365 * 86400_000
-    for i, sym in enumerate(syms):
-        out = OUT / f"{sym}_30m.csv"
-        if out.exists():
-            continue
+async def get_symbol(session, sem, sym, start_ms, end_ms, i, total) -> None:
+    out = OUT / f"{sym}_30m.csv"
+    if out.exists():
+        return
+    async with sem:
         rows = []
         cur = start_ms
         while cur < end_ms:
-            batch = get(f"{BASE}/fapi/v1/klines", {
+            batch = await paced_get(session, f"{BASE}/fapi/v1/klines", {
                 "symbol": sym, "interval": "30m", "startTime": cur,
                 "limit": 1500})
             if not batch:
@@ -63,19 +67,39 @@ def main() -> None:
             if len(batch) < 1500:
                 break
             cur = int(batch[-1][0]) + 1
-            time.sleep(PAUSE_S)
+            await asyncio.sleep(0)
         if not rows:
-            print(f"{i+1}/{len(syms)} {sym}: пусто", flush=True)
-            continue
+            print(f"{i}/{total} {sym}: пусто", flush=True)
+            return
         lines = ["open_time,open,high,low,close,volume,close_time,"
                  "quote_volume,n,taker_buy_base,taker_buy_quote,ignore"]
         for r in rows:
             lines.append(",".join(str(x) for x in r))
-        out.write_text("\n".join(lines))
-        print(f"{i+1}/{len(syms)} {sym}: {len(rows)} баров", flush=True)
-        time.sleep(PAUSE_S)
-    print("ГОТОВО", flush=True)
+        tmp = out.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines))
+        tmp.rename(out)
+        print(f"{i}/{total} {sym}: {len(rows)} баров", flush=True)
+
+
+async def main_async() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    async with aiohttp.ClientSession() as session:
+        info = await paced_get(session, f"{BASE}/fapi/v1/exchangeInfo", None)
+        syms = sorted(s["symbol"] for s in (info or {}).get("symbols", [])
+                      if s.get("contractType") == "PERPETUAL"
+                      and s.get("status") == "TRADING"
+                      and s.get("symbol", "").endswith("USDT"))
+        total = len(syms)
+        print(f"перпетуалов USDT: {total}", flush=True)
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - YEARS_BACK * 365 * 86400_000
+        sem = asyncio.Semaphore(MAX_INFLIGHT)
+        t0 = time.monotonic()
+        tasks = [get_symbol(session, sem, sym, start_ms, end_ms, i, total)
+                 for i, sym in enumerate(syms, 1)]
+        await asyncio.gather(*tasks)
+    print(f"ГОТОВО за {time.monotonic()-t0:.0f}с", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())
