@@ -508,6 +508,56 @@ class LobBot:
                 self.log_signal(sym, p, mid, "", None)
 
 
+    async def run_loop(self) -> None:
+        """Боевой цикл: шаг каждые 2 секунды, дневной кап 0.5% баланса."""
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                if now.date() != self.day_key:
+                    self.day_key = now.date()
+                    self.day_pnl = Decimal(0)
+                    self.refresh_balance()
+                self.maybe_train(now)
+                if self.day_pnl <= -self.balance * Decimal("0.005"):
+                    await asyncio.sleep(2)
+                    continue
+                for sym in self.SYMS:
+                    self.manage(sym)
+                self.try_load_model()
+                if self.model is None:
+                    await asyncio.sleep(2)
+                    continue
+                slots = len(self.pos) + len(self.pending)
+                if slots >= self.lob.max_slots:
+                    await asyncio.sleep(2)
+                    continue
+                for sym in self.SYMS:
+                    if sym in self.pos or sym in self.pending \
+                            or slots >= self.lob.max_slots:
+                        continue
+                    fr = self.feat_row(sym)
+                    if not fr:
+                        continue
+                    x, mid, _ts = fr
+                    p = float(self.model.predict(
+                        np.array([[x[f] for f in FEATS]]))[0])
+                    acted = ""
+                    if p >= self.GATE:
+                        self.open_position(sym, "BUY", p, mid, x["spread_bp"])
+                        acted = "LONG"
+                        slots += 1
+                    elif p <= 1 - self.GATE:
+                        self.open_position(sym, "SELL", p, mid,
+                                           x["spread_bp"])
+                        acted = "SHORT"
+                        slots += 1
+                    elif p >= 0.58 or p <= 0.42:
+                        self.log_signal(sym, p, mid, "", None)
+            except Exception:
+                log.exception("step")
+            await asyncio.sleep(2)
+
+
 async def main() -> None:
     timesync.install()
     bot = LobBot()
