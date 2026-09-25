@@ -41,7 +41,7 @@ from binance_common.errors import Error as BinanceError
 log = logging.getLogger("lob.engine")
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "lob" / "lob.db"
-MODEL = ROOT / "models" / "lob.txt"
+MODEL = ROOT / "data" / "lob" / "model.txt"
 
 GATE = 0.62
 HOLD_S = 300
@@ -92,6 +92,7 @@ class LobBot:
         self.start_ts = time.time()
         self.last_retrain_day = None
         self.last_recon = 0.0
+        DB.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(DB, timeout=10)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript("""

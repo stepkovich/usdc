@@ -65,6 +65,7 @@ async def main() -> None:
         handlers=[logging.StreamHandler(),
                   logging.FileHandler(log_path)])
     cfg = Config.from_env(ROOT)
+    (cfg.data_dir / "lob" / "archive").mkdir(parents=True, exist_ok=True)
     if cfg.telegram_token and cfg.telegram_chat_id:
         tg.init(cfg.telegram_token, cfg.telegram_chat_id,
                 env=cfg.mode.value)

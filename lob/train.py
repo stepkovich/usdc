@@ -158,11 +158,12 @@ if __name__ == "__main__":
     ds, feats = build_dataset(df, rich)
     evaluate(ds, feats)
     if save:
+        out.parent.mkdir(parents=True, exist_ok=True)
         m = lgb.LGBMClassifier(n_estimators=150, learning_rate=0.05,
                                max_depth=4, subsample=0.8, colsample_bytree=0.8,
                                random_state=SEED, n_jobs=-1, verbosity=-1)
         m.fit(ds[feats], ds["y"])
-        out = Path(__file__).resolve().parent.parent / "models" / "lob.txt"
+        out = Path(__file__).resolve().parent.parent / "data" / "lob" / "model.txt"
         out.parent.mkdir(parents=True, exist_ok=True)
         m.booster_.save_model(str(out))
         print(f"модель сохранена -> {out}")
