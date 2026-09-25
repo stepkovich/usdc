@@ -132,6 +132,11 @@ class Ml5hEngine:
             self.day_pnl = Decimal(0)
             self.balance = await asyncio.to_thread(
                 self.ex.account_wallet_balance, "USDT")
+        if now.date() != self.day_key or True:
+            pass
+        if time.time() - getattr(self, "_last_recon", 0) >= 600:
+            self._last_recon = time.time()
+            await self.recon()
         if self.day_pnl <= -self.balance * self.cfg.daily_cap_pct:
             await self.manage()
             return
@@ -261,10 +266,15 @@ class Ml5hEngine:
         await self.finish(sym, pos, exit_px, "taker")
 
     async def finish(self, sym: str, pos: dict, exit_px: float,
-                     exit_fee: str) -> None:
+                     exit_fee: str, allow_zero: bool = False) -> None:
         if exit_px <= 0:
-            top = await asyncio.to_thread(self.ex.order_book_top, sym)
-            exit_px = (top[0] + top[1]) / 2 if top else pos["px"]
+            if allow_zero:
+                exit_px = 0.0
+            else:
+                top = await asyncio.to_thread(self.ex.order_book_top, sym)
+                exit_px = (top[0] + top[1]) / 2 if top else pos["px"]
+                log.warning("%s: цена выхода не от биржи — мид %s", sym,
+                            exit_px)
         q = Decimal(str(pos["qty"]))
         pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q
         self.day_pnl += pnl
@@ -273,6 +283,32 @@ class Ml5hEngine:
                 f"{pnl:.2f} USDT ({exit_fee})")
         log.info("ЗАКРЫТО %s @%s pnl=%.3f (день %.2f)", sym, exit_px, pnl,
                  self.day_pnl)
+
+    async def recon(self) -> None:
+        """Биржа — источник правды: раз в 10 минут сверяем позиции.
+        Чужая (после рестарта) — усыновляем и немедленно закрываем;
+        наша, которой на бирже нет — фиксируем внешнее закрытие."""
+        try:
+            rows = await asyncio.to_thread(
+                self.ex.position_information_for, self.symbols)
+            live = {d["symbol"]: d for d in rows
+                    if Decimal(str(d.get("positionAmt", "0"))) != 0}
+        except Exception:
+            log.exception("recon")
+            return
+        for sym, d in live.items():
+            if sym in self.pos or sym in self.pending:
+                continue
+            qty = abs(Decimal(str(d.get("positionAmt", "0"))))
+            log.warning("%s: позиция без состояния (%s) — усыновляю и "
+                        "закрываю", sym, d.get("entryPrice"))
+            self.pos[sym] = {"qty": qty, "px": float(d.get("entryPrice", 0)),
+                             "entry_ts": 0, "adopted": True}
+        for sym in list(self.pos):
+            if sym not in live:
+                pos = self.pos[sym]
+                log.warning("%s: закрыта вне бота — фиксирую", sym)
+                await self.finish(sym, pos, 0.0, "external", allow_zero=True)
 
     async def manage(self) -> None:
         for sym, pend in list(self.pending.items()):
@@ -291,7 +327,20 @@ class Ml5hEngine:
                             f"(мейкер) p={pend['p']:.2f}")
                     continue
                 self.pending.pop(sym, None)
-                self._fallback_market(sym, pend)
+                info = await asyncio.to_thread(self.ex.query_order_full, sym,
+                                               pend["oid"])
+                exq = Decimal(str((info or {}).get("executedQty") or 0))
+                if exq > 0:
+                    # ЧАСТИЧНОЕ исполнение: остаток позиции усыновляем
+                    px = float((info or {}).get("avgPrice") or pend["px"])
+                    self.pos[sym] = {"qty": exq, "px": px,
+                                     "entry_ts": time.time(),
+                                     "maker_entry": True, "partial": True}
+                    tg.fire(f"🟡 <b>ML5 {sym}</b> частичный вход {exq} @ {px} "
+                            f"— веду остаток")
+                    await self.close_long(sym, self.pos[sym], maker=True)
+                else:
+                    self._fallback_market(sym, pend)
                 continue
             info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                            pend["oid"])

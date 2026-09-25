@@ -527,6 +527,9 @@ class LobBot:
                     self.day_pnl = Decimal(0)
                     self.refresh_balance()
                 self.maybe_train(now)
+                if time.time() - getattr(self, "_last_recon", 0) >= 600:
+                    self._last_recon = time.time()
+                    self.recon()
                 if self.day_pnl <= -self.balance * Decimal("0.005"):
                     await asyncio.sleep(2)
                     continue

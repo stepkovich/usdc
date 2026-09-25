@@ -286,6 +286,16 @@ class Executor:
                 return None
         return None
 
+    def position_information_for(self, symbols: list[str]) -> list:
+        pos = unwrap(self.client.rest_api.position_information_v3().data())
+        rows = getattr(pos, "root", None) or pos
+        out = []
+        for p in rows:
+            d = p.model_dump(by_alias=True) if hasattr(p, "model_dump") else p
+            if d.get("symbol") in symbols:
+                out.append(d)
+        return out
+
     def order_book_top(self, symbol: str) -> tuple[float, float] | None:
         try:
             r = self.client.rest_api.order_book(symbol=symbol, limit=5).data()
