@@ -18,6 +18,7 @@ from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import lightgbm as lgb
 
 import bot.telegram as tg
