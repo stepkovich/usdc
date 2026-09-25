@@ -123,7 +123,7 @@ class LobBot:
         info = self.client.rest_api.exchange_information().data()
         d = info.model_dump(by_alias=True)
         for s in d.get("symbols", []):
-            if s.get("symbol") in SYMS:
+            if s.get("symbol") in self.SYMS:
                 fl = {}
                 for f in s.get("filters", []):
                     t = f.get("filterType")
