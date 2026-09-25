@@ -149,6 +149,7 @@ def run_config(built: dict, group_names: list[str]) -> pd.DataFrame:
         mask = b["mask"]
         close = df["close"].values
         data[sym] = {"X": X[mask].reset_index(drop=True),
+                     "y": b["y"][mask],
                      "times": df["open_time"].values[mask],
                      "closes": close[mask]}
     all_times = np.concatenate([d["times"] for d in data.values()])
@@ -234,8 +235,10 @@ if __name__ == "__main__":
         close = df["close"].values
         fwd = np.full(len(df), np.nan)
         fwd[:-TARGET_HORIZON] = close[TARGET_HORIZON:] / close[:-TARGET_HORIZON] - 1
+        y = np.where(np.isnan(fwd), np.nan, (fwd > 0).astype(float))
+        y = y[mask]
         cols_new = {g: group_columns(df, btc_close, sym, g) for g in GROUPS}
-        built[sym] = {"df": df, "X_base": X_base, "mask": mask,
+        built[sym] = {"df": df, "X_base": X_base, "mask": mask, "y": y,
                       "cols_new": cols_new}
     log.info("признаки готовы; прогоны: база + 4 группы + финал")
 
