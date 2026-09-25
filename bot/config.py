@@ -73,16 +73,13 @@ class ML5HConfig(BaseModel):
 
 class LobConfig(BaseModel):
     enabled: bool = True
-    symbols: list[str] = [
-        "BTCUSDC", "ETHUSDC", "BNBUSDC", "SOLUSDC", "XRPUSDC",
-        "DOGEUSDC", "ADAUSDC", "AVAXUSDC", "LINKUSDC", "LTCUSDC",
-    ]
+    symbols: list[str] = []   # пусто = ВСЕ живые USDC-перпетуалы (авто с биржи)
     model_path: Path = ROOT / "models" / "lob.txt"
     gate: float = 0.62
     hold_s: int = 300
     row_ms: int = 500                # частота пачек биржи — пишем каждую
     hot_hours: int = 6
-    archive_days: int = 5
+    archive_days: int = 3
     first_train_h: int = 6           # часов данных до первой тренировки
     retrain_at_utc: tuple[int, int] = (0, 15)
     risk_pct: Decimal = Decimal("0.0015")

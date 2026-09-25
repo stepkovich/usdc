@@ -122,6 +122,15 @@ class LobBot:
             log.warning("режим позиции не прочитан (%s) — считаем HEDGE", e)
         info = self.client.rest_api.exchange_information().data()
         d = info.model_dump(by_alias=True)
+        if self.cfg.lob.symbols:          # вселенная задана руками
+            pass
+        else:                              # НА ВСЕХ: все живые USDC-перпетуалы
+            self.SYMS = sorted(s["symbol"] for s in d.get("symbols", [])
+                               if s.get("symbol", "").endswith("USDC")
+                               and s.get("status") == "TRADING"
+                               and s.get("contractType") == "PERPETUAL")
+            log.info("вселенная стакана: автообнаружено %d USDC-пар",
+                     len(self.SYMS))
         for s in d.get("symbols", []):
             if s.get("symbol") in self.SYMS:
                 fl = {}
