@@ -105,8 +105,28 @@ class Ml5hEngine:
                 log.exception("tick")
             await asyncio.sleep(2)
 
+    def _model_mtime(self) -> float:
+        try:
+            return self.c.model_path.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    def maybe_reload_model(self) -> None:
+        mt = self._model_mtime()
+        if mt and mt != getattr(self, "_model_loaded_mtime", -1):
+            try:
+                import lightgbm as lgb
+                self.model = lgb.Booster(model_file=str(self.c.model_path))
+                self._model_loaded_mtime = mt
+                log.info("модель перезагружена (обновлена %s)",
+                         datetime.fromtimestamp(mt, timezone.utc)
+                         .strftime("%H:%M UTC"))
+            except Exception as e:
+                log.warning("перезагрузка модели не удалась: %s", e)
+
     async def tick(self) -> None:
         now = datetime.now(timezone.utc)
+        self.maybe_reload_model()
         if now.date() != self.day_key:
             self.day_key = now.date()
             self.day_pnl = Decimal(0)
