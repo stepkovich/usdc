@@ -160,7 +160,7 @@ class LobBot:
                         log.warning("маржа %s: %s", sym, e)
         self.refresh_balance()
         log.info("настроено: фильтры %d/%d, баланс %s USDT",
-                 len(self.filters), len(SYMS), self.balance)
+                 len(self.filters), len(self.SYMS), self.balance)
 
     def refresh_balance(self) -> None:
         bal = self.client.rest_api.futures_account_balance_v3().data()
