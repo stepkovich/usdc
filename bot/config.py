@@ -79,6 +79,7 @@ class BotConfig(BaseModel):
     rearm: bool = False                        # перестановка заявки на новый экстремум
     smc_filter: bool = False                   # SMC-фильтр: не входить против структуры 15м
     tf_min: int = 1                            # зернистость торговых свечей (1=минутки)
+    regime_gate: bool = False                  # гейт по режиму BTC(30д): лонги в быке, шорты в медведе
 
     # учёт «как будто комиссии нет» (ваш тариф) + реальность демо
     assume_maker_fee: Decimal = Decimal("0")       # тариф: мейкер 0
@@ -118,6 +119,7 @@ class BotConfig(BaseModel):
             smc_filter=os.environ.get("BOT_SMC_FILTER", "0") == "1",
             tf_min=int(os.environ.get("BOT_TF_MIN", "1")),
             donchian_bars=int(os.environ.get("BOT_DONCHIAN_BARS", "480")),
+            regime_gate=os.environ.get("BOT_REGIME_GATE", "0") == "1",
         )
         if os.environ.get("BOT_SYMBOLS"):
             cfg.symbols = [s.strip().upper()

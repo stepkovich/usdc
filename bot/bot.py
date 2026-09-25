@@ -84,6 +84,7 @@ class Bot:
                                            ROOT / "bot" / "journal.db"))
         self.ledger = Ledger(journal_path, env=cfg.mode.value)
         self.feed = MarketFeed(cfg)
+        self.regime = None                    # up | down | None (боковик/прогрев)
         if getattr(self, 'tf_hist', None) is None and cfg.tf_min > 1:
             wtf = max(8, self.cfg.atr_window // cfg.tf_min + 1)
             self.tf_hist = {}
@@ -196,6 +197,20 @@ class Bot:
                                         a.symbol)
                             self.strategy.state(a.symbol).pending = None
                             continue
+                        # режим-гейт: вход только по направлению тренда BTC(30д)
+                        if self.cfg.regime_gate and self.regime in ("up", "down", "flat"):
+                            want_long = a.side.value == "LONG"
+                            ok = (self.regime == "up" and want_long) or \
+                                 (self.regime == "down" and not want_long)
+                            if not ok:
+                                log.warning("%s: сигнал %s пропущен — режим BTC %s, "
+                                            "торгуем только %s", a.symbol, a.side.value,
+                                            self.regime,
+                                            "LONG" if self.regime == "up" else "SHORT")
+                                self.ledger.event("regime_gate_skip", a.symbol,
+                                                  {"side": a.side.value, "regime": self.regime})
+                                self.strategy.state(a.symbol).pending = None
+                                continue
                         # направленный дневной лимит убытка
                         if self.cfg.daily_loss_pct > 0 and \
                                 self.daily_locked.get(a.side.value):
@@ -883,6 +898,8 @@ class Bot:
                         self.exec.account_wallet_balance, "USDC")
                     log.info("снимок баланса обновлён: %s USDC", self.balance_snapshot)
                     self.log_universe_state()
+                    if self.cfg.regime_gate:
+                        await self.refresh_regime()
                 except Exception:
                     log.exception("суточный сброс")
             # синхронизация времени с биржей каждые 15 мин (анти -1021)
@@ -955,6 +972,23 @@ class Bot:
                  "(%d мс)", done, len(self.symbols), known,
                  int((time.time() - t0) * 1000))
 
+    async def refresh_regime(self) -> None:
+        """Режим BTC по 30-дневной доходности (1д свечи с биржи).
+        up: >+3%, down: <−3%, иначе боковик (гейт закрывает входы)."""
+        resp = self.feed.market_rest.rest_api.kline_candlestick_data(
+            symbol="BTCUSDC",
+            interval=KlineCandlestickDataIntervalEnum["INTERVAL_1d"].value, limit=31)
+        rows = getattr(resp.data(), "root", None) or resp.data()
+        closes = [float(r[4]) for r in rows if float(r[5]) > 0]
+        if len(closes) < 30:
+            log.warning("regime: мало дневных свечей (%d) — режим не обновлён", len(closes))
+            return
+        ret = closes[-1] / closes[0] - 1
+        new = "up" if ret > 0.03 else ("down" if ret < -0.03 else "flat")
+        if new != self.regime:
+            log.info("регим BTC: %+.1f%% за 30д -> %s", ret * 100, new)
+        self.regime = new
+
     async def _tf_backfill(self) -> None:
         """Прогрев TF-историй: 1500 минуток на пару -> ~100 TF-баров."""
         t0 = time.time()
@@ -1001,6 +1035,12 @@ class Bot:
         await self.feed.warmup(self.symbols)
         if self.cfg.smc_filter:
             await self._smc_backfill()
+        if self.cfg.regime_gate:
+            try:
+                await self.refresh_regime()
+                log.info("режим-гейт активен: BTC-30д = %s", self.regime)
+            except Exception:
+                log.exception("regime: стартовый расчёт не удался")
         if self.cfg.tf_min > 1:
             await self._tf_backfill()
         self.log_universe_state()
