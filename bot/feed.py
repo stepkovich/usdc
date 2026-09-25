@@ -42,13 +42,19 @@ class Bar:
 
 
 class SymbolHistory:
-    """Состояние одной пары: окно баров, ATR-фракция, Дончиан 8ч."""
+    """Состояние одной пары: окно баров (Дончиан), ATR-фракция,".
 
-    def __init__(self, symbol: str, window: int):
+    Окна Дончиана и ATR раздельные: Дончиан может смотреть на 12ч (720
+    минутных баров), пока ATR остаётся 8ч (480 баров) — как в бэктесте
+    развёртки окон 25.09."""
+
+    def __init__(self, symbol: str, window: int, atr_window: int | None = None):
         self.symbol = symbol
         self.window = window
+        self.atr_len = atr_window or window
         self.bars: deque[Bar] = deque(maxlen=window)
-        self.tr_sum = Decimal(0)          # скользящая сумма True Range за окно
+        self.trs: deque[Decimal] = deque(maxlen=self.atr_len)
+        self.tr_sum = Decimal(0)          # скользящая сумма True Range за ATR-окно
         self.last_price = Decimal(0)
         self.updated_at = 0.0
 
@@ -61,11 +67,11 @@ class SymbolHistory:
     def push_closed(self, bar: Bar) -> None:
         prev_close = self.bars[-1].close if self.bars else Decimal(0)
         tr = self._tr(prev_close, bar)
-        if len(self.bars) == self.window:
-            self.tr_sum -= self._tr(
-                self.bars[-2].close if len(self.bars) > 1 else Decimal(0), self.bars[-1])
-        self.bars.append(bar)
+        if len(self.trs) == self.atr_len:
+            self.tr_sum -= self.trs[0]
+        self.trs.append(tr)
         self.tr_sum += tr
+        self.bars.append(bar)
         self.last_price = bar.close
         self.updated_at = time.time()
 
@@ -81,7 +87,7 @@ class SymbolHistory:
         if self.tr_sum == 0 or self.bars[-1].close == 0:
             # замороженный/неликвидный контракт: нулевой диапазон всех баров
             raise ValueError(f"{self.symbol}: нулевой ATR (контракт заморожен?)")
-        return self.tr_sum / Decimal(self.window) / self.bars[-1].close
+        return self.tr_sum / Decimal(len(self.trs)) / self.bars[-1].close
 
     def donchian(self) -> tuple[Decimal, Decimal]:
         """(max high, min low) за окно, исключая последний закрытый бар
@@ -125,7 +131,7 @@ class MarketFeed:
         log.info("тёплый старт: %d/%d пар прогрето", len(self.hist), len(symbols))
 
     def _fetch_klines(self, symbol: str, limit: int) -> SymbolHistory:
-        h = SymbolHistory(symbol, self.cfg.atr_window)
+        h = SymbolHistory(symbol, self.cfg.donchian_bars, self.cfg.atr_window)
         resp = self.market_rest.rest_api.kline_candlestick_data(
             symbol=symbol,
             interval=KlineCandlestickDataIntervalEnum["INTERVAL_1m"].value,

@@ -61,7 +61,8 @@ class BotConfig(BaseModel):
     # стратегия (замороженные параметры бэктеста, Decimal)
     target_pct: Decimal = Decimal("0.005")     # цель +0.5%
     stop_atr_mult: Decimal = Decimal("12")     # стоп = 12 x ATR(480m) как доля цены
-    atr_window: int = 480                      # 8 часов минутных баров
+    atr_window: int = 480                      # окно ATR, минутных баров (8ч)
+    donchian_bars: int = 480                   # окно Дончиана, минутных баров (8ч)
     wait_bars: int = 60                        # сколько минут ждём отката к уровню
     cancel_ratio: Decimal = Decimal("0.5")     # отмена заявки: close < level*(1-0.5*atr)
     cool_bars: int = 120                       # пауза после выхода (минут)
@@ -116,6 +117,7 @@ class BotConfig(BaseModel):
             rearm=os.environ.get("BOT_REARM", "0") == "1",
             smc_filter=os.environ.get("BOT_SMC_FILTER", "0") == "1",
             tf_min=int(os.environ.get("BOT_TF_MIN", "1")),
+            donchian_bars=int(os.environ.get("BOT_DONCHIAN_BARS", "480")),
         )
         if os.environ.get("BOT_SYMBOLS"):
             cfg.symbols = [s.strip().upper()
