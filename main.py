@@ -45,7 +45,7 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
             lob_day = float(lob.day_pnl)
             ml_model = "готова" if ml5h.model else "ждёт артефакт"
             lob_model = "готова" if lob.model else \
-                f"копит данные ({lob.first_train_h}ч)"
+                f"копит данные ({lob.lob.first_train_h}ч)"
             tg.fire(
                 f"📊 <b>{now.strftime('%H:%M UTC')} [DEMO]</b>\n"
                 f"ML-5ч (USDT): позиций {ml_open}, день {ml_day:+.2f} USDT, "
