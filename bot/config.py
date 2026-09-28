@@ -57,7 +57,7 @@ class ML5HConfig(BaseModel):
     enabled: bool = True
     symbols: list[str] = []
     model_path: Path = ROOT / "data" / "models" / "ml5h.txt"   # на томе данных: обновление без пересборки
-    meta_path: Path = ROOT / "models" / "ml5h_meta.json"
+    meta_path: Path = ROOT / "data" / "models" / "ml5h_meta.json"
     gate: float = 0.55               # заморожено на этапе исследования
     hold_bars: int = 10              # 10 x 30м = 5 часов
     bar_minutes: int = 30
