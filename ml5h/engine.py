@@ -242,11 +242,12 @@ class Ml5hEngine:
         return min(by_risk, by_cap)
 
     def qty_for(self, sym: str, px: Decimal) -> Decimal:
+        """qty_for_notional принимает НОТИОНАЛ в USDT и сам делит на цену
+        (баг 28.09: двойное деление давало заявки в 4+ раза больше расчёта)."""
         fl = self.ex.filters.get(sym)
         if not fl or px <= 0:
             return Decimal(0)
-        raw = self.notional() / px
-        return fl.qty_for_notional(raw, px) or Decimal(0)
+        return fl.qty_for_notional(self.notional(), px) or Decimal(0)
 
     async def open_long(self, sym: str, p: float) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
