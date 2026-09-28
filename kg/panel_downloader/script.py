@@ -1,80 +1,77 @@
-"""Кегл-кернел: качает 30м панель ВСЕХ USDT-перпетуалов (2 года) с биржи
-и сохраняет в output. Свежие IP Kaggle + честный темп (~1700 weight/min
-при лимите 2400) — без 429-пауз."""
-import asyncio, time, io, os
-import aiohttp
+"""Кегл-кернел v3: панель из ДАМПОВ data.binance.vision (API Биненса
+блокирует US-IP — HTTP 451; дампы открыты). Месячные zip 30м свечей,
+список монет вшит с сервера. open_time в свежих дампах — микросекунды,
+детектируем и приводим к миллисекундам."""
+import io
+import urllib.request
+import json
+import os
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
+META_PATH = "/kaggle/input/usdc-panel-meta/panel_meta.json"
+if not os.path.exists(META_PATH):
+    print("input-дерево:", flush=True)
+    for root, dirs, fs in os.walk("/kaggle/input"):
+        print(" ", root, len(fs), flush=True)
+    raise SystemExit(1)
+META = json.load(open(META_PATH))
+SYMS = META["syms"]
+MONTHS = META["months"]
 OUT = "/kaggle/working"
-PACE_S = 0.35
-MAX_INFLIGHT = 16
-YEARS_BACK = 2
-BASE = "https://fapi.binance.com"
+BASE = "https://data.binance.vision/data/futures/um/monthly/klines/{sym}/30m/{sym}-30m-{month}.zip"
 
-_next = [0.0]
-_lock = asyncio.Lock()
 
-async def paced_get(session, url, params):
-    async with _lock:
-        now = time.monotonic()
-        wait = max(0.0, _next[0] - now)
-        _next[0] = max(now, _next[0]) + PACE_S
-    if wait > 0:
-        await asyncio.sleep(wait)
-    for _ in range(6):
-        try:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=25)) as r:
-                if r.status in (418, 429):
-                    await asyncio.sleep(60 if r.status == 418 else 20)
-                    continue
-                r.raise_for_status()
-                return await r.json()
-        except Exception:
-            await asyncio.sleep(3)
-    return None
+errs = []
 
-async def get_symbol(session, sem, sym, start_ms, end_ms, i, total):
+def fetch(sym, month):
+    url = BASE.format(sym=sym, month=month)
+    try:
+        r = urllib.request.urlopen(url, timeout=30)
+        return r.read()
+    except Exception as e:
+        if len(errs) < 3:
+            errs.append(f"{type(e).__name__}: {str(e)[:120]}")
+            if len(errs) == 1:
+                print("ПЕРВАЯ ОШИБКА СЕТИ:", errs[0], flush=True)
+        return None
+
+
+def get_symbol(args):
+    sym, i, total = args
     path = f"{OUT}/{sym}_30m.csv"
     if os.path.exists(path):
         return
-    async with sem:
-        rows = []
-        cur = start_ms
-        while cur < end_ms:
-            batch = await paced_get(session, f"{BASE}/fapi/v1/klines",
-                {"symbol": sym, "interval": "30m", "startTime": cur, "limit": 1500})
-            if not batch:
-                break
-            rows.extend(batch)
-            if len(batch) < 1500:
-                break
-            cur = int(batch[-1][0]) + 1
-            await asyncio.sleep(0)
-        if not rows:
-            print(f"{i}/{total} {sym}: пусто", flush=True)
-            return
-        buf = io.StringIO()
-        buf.write("open_time,open,high,low,close,volume,close_time,quote_volume,n,taker_buy_base,taker_buy_quote,ignore\n")
-        for r in rows:
-            buf.write(",".join(str(x) for x in r) + "\n")
-        with open(path, "w") as f:
-            f.write(buf.getvalue())
-        print(f"{i}/{total} {sym}: {len(rows)} баров", flush=True)
+    rows = []
+    for month in MONTHS:
+        data = fetch(sym, month)
+        if not data:
+            continue
+        z = zipfile.ZipFile(io.BytesIO(data))
+        for name in z.namelist():
+            rows.extend(z.read(name).decode().strip().split("\n"))
+    if not rows:
+        print(f"{i}/{total} {sym}: пусто", flush=True)
+        return
+    clean = [r for r in rows if r and not r.startswith("open_time")]
+    out = ["open_time,open,high,low,close,volume,close_time,quote_volume,"
+           "n,taker_buy_base,taker_buy_quote,ignore"]
+    for r in clean:
+        c = r.split(",")
+        ot = int(float(c[0]))
+        if ot > 10 ** 14:            # микросекунды -> миллисекунды
+            ot //= 1000
+        out.append(",".join([str(ot)] + c[1:]))
+    with open(path, "w") as f:
+        f.write("\n".join(out))
+    print(f"{i}/{total} {sym}: {len(clean)} строк", flush=True)
 
-async def main():
-    async with aiohttp.ClientSession() as s:
-        info = await paced_get(s, f"{BASE}/fapi/v1/exchangeInfo", None)
-        syms = sorted(x["symbol"] for x in (info or {}).get("symbols", [])
-                      if x.get("contractType") == "PERPETUAL"
-                      and x.get("status") == "TRADING"
-                      and x.get("symbol", "").endswith("USDT"))
-        total = len(syms)
-        print(f"перпетуалов: {total}", flush=True)
-        end_ms = int(time.time() * 1000)
-        start_ms = end_ms - YEARS_BACK * 365 * 86400_000
-        sem = asyncio.Semaphore(MAX_INFLIGHT)
-        t0 = time.monotonic()
-        await asyncio.gather(*[get_symbol(s, sem, sym, start_ms, end_ms, i, total)
-                               for i, sym in enumerate(syms, 1)])
-        print(f"ГОТОВО за {time.monotonic()-t0:.0f}с", flush=True)
 
-asyncio.run(main())
+t0 = time.time()
+with ThreadPoolExecutor(16) as ex:
+    list(ex.map(get_symbol,
+                [(s, i, len(SYMS)) for i, s in enumerate(SYMS, 1)]))
+print(f"ГОТОВО за {time.time() - t0:.0f}с", flush=True)
+if errs:
+    print("ошибки сети:", errs, flush=True)
