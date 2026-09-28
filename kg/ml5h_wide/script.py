@@ -164,10 +164,33 @@ res = pd.concat(all_trades)
 avg_all = float(res["pnl"].mean() * 100)
 pos_q = sum(1 for f in folds if (f["avg"] or 0) > 0)
 null_pct = int(np.mean(nulls)) if nulls else 0
-verdict = bool(avg_all >= 0.10 and null_pct >= 95 and pos_q >= 5)
-print(f"ИТОГ: {avg_all:+.4f}% | плюс-кварталов {pos_q}/{len(folds)} | "
-      f"нуль {null_pct}% | ВЕРДИКТ {verdict}", flush=True)
+# --- ЧЕСТНЫЙ ЭКЗАМЕН v2 (предрегистрация до запуска): дрейф-свободное
+# сравнение модель-с-собой. Навык = заработок самой уверенной квинтили
+# минус заработок самой неуверенной. СДАНО если: разница > 0 минимум
+# в 6 кварталах из 8 И средняя разница >= +0.20% на сделку.
+spreads = []
+spread_by_q = {}
+for t, f in zip(all_trades, folds):
+    if t.empty or "p" not in t.columns or len(t) < 200:
+        continue
+    t = t.sort_values("p")
+    n5 = max(1, len(t) // 5)
+    bot = t["pnl"].head(n5).mean() * 100
+    top = t["pnl"].tail(n5).mean() * 100
+    spread_by_q[f["quarter"]] = round(top - bot, 4)
+    spreads.append(top - bot)
+    print(f"  экзамен {f['quarter']}: уверенные {top:+.3f}% vs "
+          f"неуверенные {bot:+.3f}% -> навык {top - bot:+.3f}%", flush=True)
+pos_spread = sum(1 for s in spreads if s > 0)
+mean_spread = float(np.mean(spreads)) if spreads else 0.0
+verdict = bool(pos_spread >= 6 and mean_spread >= 0.20)
+print(f"ИТОГ: средняя {avg_all:+.4f}% | навык в {pos_spread}/{len(spreads)} "
+      f"кварталах | средний навык {mean_spread:+.3f}% | ВЕРДИКТ {verdict}",
+      flush=True)
 json.dump({"avg": avg_all, "pos_quarters": pos_q, "null_pct": null_pct,
+           "skill_pos_quarters": pos_spread,
+           "skill_mean_spread": mean_spread,
+           "skill_by_quarter": spread_by_q,
            "verdict": verdict, "folds": folds},
           open("/kaggle/working/report.json", "w"), indent=1)
 if verdict:
