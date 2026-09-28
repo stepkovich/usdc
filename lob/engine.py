@@ -337,42 +337,28 @@ class LobBot:
 
     # ---------- модель ----------
     def maybe_train(self, now: datetime) -> None:
-        if self.model is None:
-            if time.time() - self.start_ts > FIRST_TRAIN_H * 3600:
-                self.train()
-            return
-        if (now.hour, now.minute) >= RETRAIN_AT \
-                and self.last_retrain_day != now.date():
-            self.last_retrain_day = now.date()
-            self.train()
-
-    def train(self) -> None:
-        log.info("переобучение (в отдельном процессе)...")
+        """Сервер НЕ обучается (458 МБ RAM — обучение убивало контейнер
+        OOM-киллером). Модель едет файлом с локальной машины; здесь только
+        горячая подгрузка по mtime (как у ml5h)."""
         try:
-            r = subprocess.run(
-                [sys.executable, str(ROOT / "lob" / "train.py"), "--save"],
-                capture_output=True, text=True, timeout=1800)
-            for ln in (r.stdout or "").strip().splitlines()[-3:]:
-                log.info("train: %s", ln)
-            if r.returncode == 0 and MODEL.exists():
-                import lightgbm as lgb
-                self.model = lgb.Booster(model_file=str(MODEL))
-                import bot.telegram as tg
-                tg.fire("🧠 <b>Стакан</b>: ночное переобучение прошло, "
-                        "модель обновлена")
-                log.info("модель обновлена")
-            else:
-                import bot.telegram as tg
-                tg.fire("⚠️ <b>Стакан</b>: ночное переобучение не удалось — "
-                        "работаем на предыдущей модели")
-        except Exception as e:
-            log.warning("переобучение не удалось: %s", e)
+            mt = MODEL.stat().st_mtime
+        except Exception:
+            return
+        if mt != getattr(self, "_model_mtime", -1):
+            self._model_mtime = mt
+            self.try_load_model()
 
     def try_load_model(self) -> None:
         if self.model is None and MODEL.exists():
-            import lightgbm as lgb
-            self.model = lgb.Booster(model_file=str(MODEL))
-            log.info("модель загружена из файла")
+            try:
+                import lightgbm as lgb
+                self.model = lgb.Booster(model_file=str(MODEL))
+                import bot.telegram as tg
+                tg.fire("🧠 <b>Стакан</b>: модель получена — начинаю "
+                        "оценивать очереди")
+                log.info("модель загружена из файла")
+            except Exception as e:
+                log.warning("модель не загрузилась: %s", e)
 
     # ---------- сделки ----------
     def log_signal(self, sym: str, p: float, mid: float, acted: str,
