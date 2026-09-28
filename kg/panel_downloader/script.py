@@ -18,7 +18,7 @@ if not os.path.exists(META_PATH):
     raise SystemExit(1)
 META = json.load(open(META_PATH))
 SYMS = META["syms"]
-MONTHS = META["months"]
+MONTHS = META["months5y"]
 OUT = "/kaggle/working"
 BASE = "https://data.binance.vision/data/futures/um/monthly/klines/{sym}/30m/{sym}-30m-{month}.zip"
 
