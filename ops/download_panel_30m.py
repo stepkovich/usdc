@@ -17,7 +17,7 @@ import aiohttp
 
 OUT = Path("/home/iek/PycharmProjects/USDC/data_cache_30m")
 PACE_S = 0.52
-MAX_INFLIGHT = 8
+MAX_INFLIGHT = 16
 YEARS_BACK = 2
 BASE = "https://fapi.binance.com"
 
