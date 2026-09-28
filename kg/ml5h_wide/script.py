@@ -16,25 +16,30 @@ PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
 
 def sym_id(sym): return np.uint16(zlib.crc32(sym.encode()) & 0xFFFF)
 
-import os
-cands = glob.glob("/kaggle/input/**/*.csv", recursive=True)
-files = sorted(f for f in cands if f.endswith("_30m.csv"))
-print("input-дерево:", flush=True)
-for root, dirs, fs in os.walk("/kaggle/input"):
-    print(" ", root, len(fs), "файлов", flush=True)
-print("CSV 30м найдено:", len(files), flush=True)
-if len(files) < 500:
-    print("ПАНЕЛЬ НЕ ПРИШЛА — выход с диагностикой", flush=True)
-    json.dump({"verdict": False, "error": f"panel files {len(files)}",
+import os, zipfile, io
+zips = glob.glob("/kaggle/input/**/panel.zip", recursive=True)
+print("panel.zip найден:", zips[:2], flush=True)
+if not zips:
+    for root, dirs, fs in os.walk("/kaggle/input"):
+        print(" ", root, len(fs), "файлов", flush=True)
+    json.dump({"verdict": False, "error": "panel.zip not found",
                "input_tree": str(os.listdir("/kaggle/input"))},
+              open("/kaggle/working/report.json", "w"), indent=1)
+    raise SystemExit(0)
+zf = zipfile.ZipFile(zips[0])
+members = [n for n in zf.namelist() if n.endswith("_30m.csv")]
+print("монет в панели:", len(members), flush=True)
+if len(members) < 500:
+    json.dump({"verdict": False, "error": f"panel members {len(members)}"},
               open("/kaggle/working/report.json", "w"), indent=1)
     raise SystemExit(0)
 btc = None
 parts = []
-for i, f in enumerate(files, 1):
-    sym = f.split("/")[-1].replace("_30m.csv", "")
-    df = pd.read_csv(f, usecols=["open_time", "high", "low", "close",
-                                 "volume", "quote_volume", "taker_buy_base"])
+for i, name in enumerate(members, 1):
+    sym = name.replace("_30m.csv", "")
+    df = pd.read_csv(io.BytesIO(zf.read(name)),
+                     usecols=["open_time", "high", "low", "close",
+                              "volume", "quote_volume", "taker_buy_base"])
     for c in df.columns:
         df[c] = df[c].astype("float32")
     df["open_time"] = df["open_time"].astype(np.int64)

@@ -39,10 +39,9 @@ def fetch(sym, month):
 
 
 def get_symbol(args):
+    """Возвращает (sym, текст CSV) — панель собирается в ОДИН zip
+    (лимит Кегла: 500 файлов в output, у нас 527 CSV)."""
     sym, i, total = args
-    path = f"{OUT}/{sym}_30m.csv"
-    if os.path.exists(path):
-        return
     rows = []
     for month in MONTHS:
         data = fetch(sym, month)
@@ -53,7 +52,7 @@ def get_symbol(args):
             rows.extend(z.read(name).decode().strip().split("\n"))
     if not rows:
         print(f"{i}/{total} {sym}: пусто", flush=True)
-        return
+        return None
     clean = [r for r in rows if r and not r.startswith("open_time")]
     out = ["open_time,open,high,low,close,volume,close_time,quote_volume,"
            "n,taker_buy_base,taker_buy_quote,ignore"]
@@ -63,15 +62,20 @@ def get_symbol(args):
         if ot > 10 ** 14:            # микросекунды -> миллисекунды
             ot //= 1000
         out.append(",".join([str(ot)] + c[1:]))
-    with open(path, "w") as f:
-        f.write("\n".join(out))
     print(f"{i}/{total} {sym}: {len(clean)} строк", flush=True)
+    return (sym, "\n".join(out))
 
 
 t0 = time.time()
 with ThreadPoolExecutor(16) as ex:
-    list(ex.map(get_symbol,
-                [(s, i, len(SYMS)) for i, s in enumerate(SYMS, 1)]))
-print(f"ГОТОВО за {time.time() - t0:.0f}с", flush=True)
+    results = list(ex.map(get_symbol,
+                          [(s, i, len(SYMS)) for i, s in enumerate(SYMS, 1)]))
+ok = [r for r in results if r]
+with zipfile.ZipFile(f"{OUT}/panel.zip", "w",
+                     compression=zipfile.ZIP_DEFLATED) as z:
+    for sym, text in ok:
+        z.writestr(f"{sym}_30m.csv", text)
+print(f"ГОТОВО за {time.time() - t0:.0f}с: {len(ok)}/{len(SYMS)} монет -> "
+      f"panel.zip", flush=True)
 if errs:
     print("ошибки сети:", errs, flush=True)
