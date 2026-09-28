@@ -398,6 +398,22 @@ class Ml5hEngine:
                 tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {pend['qty']} @ {px} "
                         f"(мейкер) p={pend['p']:.2f}")
         for sym, pos in list(self.pos.items()):
+            # АВАРИЙНЫЙ ВЫХОД (предрегистрация 28.09 по MAE-исследованию:
+            # глубже -15% ныряют 0.27% сделок, их финал -11.7%, выживают 6%).
+            # Закрываем по рынку, поверх остаётся биржевая ликвидация.
+            top = await asyncio.to_thread(self.ex.order_book_top, sym)
+            if top:
+                bid, _ba = top
+                loss = (Decimal(str(pos["px"])) - Decimal(str(bid))) \
+                    / Decimal(str(pos["px"]))
+                if loss >= self.c.emergency_stop_pct:
+                    log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%% (порог %s%%)",
+                                sym, float(loss) * 100,
+                                self.c.emergency_stop_pct * 100)
+                    tg.fire(f"🛑 <b>ML5 АВАРИЙНЫЙ ВЫХОД {sym}</b> "
+                            f"−{float(loss)*100:.1f}%")
+                    await self.close_long(sym, pos, maker=False)
+                    continue
             if "exit_oid" in pos:
                 if time.time() > pos["exit_deadline"]:
                     await asyncio.to_thread(self.ex.cancel_order, sym,

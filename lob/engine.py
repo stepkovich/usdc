@@ -453,6 +453,21 @@ class LobBot:
         pos = self.pos.get(sym)
         if not pos:
             return
+        # АВАРИЙНЫЙ ВЫХОД: флеш-краш защита (уровень из конфига)
+        top = self.book_top(sym)
+        if top:
+            bb, ba = top
+            px_now = bb if pos["pside"] == "LONG" else ba
+            loss = (Decimal(str(pos["px"])) - Decimal(str(px_now))) \
+                / Decimal(str(pos["px"])) \
+                if pos["pside"] == "LONG" \
+                else (Decimal(str(px_now)) - Decimal(str(pos["px"]))) \
+                / Decimal(str(pos["px"]))
+            if loss >= self.lob.emergency_stop_pct:
+                log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%%", sym,
+                            float(loss) * 100)
+                self.close_position(sym, pos, maker=False)
+                return
         if "exit_oid" in pos:
             if time.time() > pos["exit_deadline"]:
                 self.cancel(sym, pos["exit_oid"])

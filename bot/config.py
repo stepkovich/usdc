@@ -69,6 +69,7 @@ class ML5HConfig(BaseModel):
     entry_ttl_s: int = 60
     exit_ttl_s: int = 90
     leverage: int = 3
+    emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (MAE-исследование 28.09)
 
 
 class LobConfig(BaseModel):
@@ -89,6 +90,7 @@ class LobConfig(BaseModel):
     entry_ttl_s: int = 60
     exit_ttl_s: int = 45
     leverage: int = 3
+    emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (флеш-краш защита)
 
 
 class Config(BaseModel):
