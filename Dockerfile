@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && find /usr/local/lib/python3.12 -name '*.pyc' -delete
 
 COPY bot/ ./bot/
 COPY ml5h/ ./ml5h/
