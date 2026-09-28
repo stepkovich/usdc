@@ -56,7 +56,7 @@ RECON_S = 600
 FIRST_TRAIN_H = 6
 RETRAIN_AT = (0, 15)              # 00:15 UTC
 
-FEATS = ["mid", "spread_bp", "microprice", "imb5", "imb10", "imb20",
+FEATS = ["spread_bp", "microprice_rel", "imb5", "imb10", "imb20",
          "flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell",
          "ntr10", "vpin10", "d30", "d120"]
 
@@ -328,7 +328,8 @@ class LobBot:
         m30, m120 = past_mid(30_000), past_mid(120_000)
         d30 = mid / m30 - 1 if m30 else None
         d120 = mid / m120 - 1 if m120 else None
-        x = dict(zip(FEATS, [mid, sp, micro, i5, i10, i20, f10b, f10s,
+        mrel = (micro / mid - 1) * 10000 if mid else None
+        x = dict(zip(FEATS, [sp, mrel, i5, i10, i20, f10b, f10s,
                              f60b, f60s, ntr, vpin, d30, d120]))
         if any(v is None or (isinstance(v, float) and np.isnan(v))
                for v in x.values()):
