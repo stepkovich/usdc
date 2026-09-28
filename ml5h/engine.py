@@ -117,13 +117,24 @@ class Ml5hEngine:
             try:
                 import lightgbm as lgb
                 self.model = lgb.Booster(model_file=str(self.c.model_path))
+                # мета едет ВМЕСТЕ с моделью: признаки и вселенная могут
+                # измениться (иначе предсказание падает по числу колонок)
+                meta = json.loads(self.c.meta_path.read_text())
+                self.feats = meta["features"]
+                new_syms = [s for s in (self.c.symbols or meta["symbols"])
+                            if s not in self.symbols]
+                self.symbols = self.c.symbols or meta["symbols"]
                 self._model_loaded_mtime = mt
                 import bot.telegram as tg
-                tg.fire("🧠 <b>ML-5ч</b>: новая модель получена и "
-                        "подхвачена без рестарта")
-                log.info("модель перезагружена (обновлена %s)",
+                tg.fire(f"🧠 <b>ML-5ч</b>: новая модель получена "
+                        f"({len(self.feats)} признаков, "
+                        f"{len(self.symbols)} монет) — подхвачена "
+                        f"без рестарта")
+                log.info("модель перезагружена (обновлена %s): %d фич, "
+                         "%d символов (+%d новых)",
                          datetime.fromtimestamp(mt, timezone.utc)
-                         .strftime("%H:%M UTC"))
+                         .strftime("%H:%M UTC"), len(self.feats),
+                         len(self.symbols), len(new_syms))
             except Exception as e:
                 log.warning("перезагрузка модели не удалась: %s", e)
 
