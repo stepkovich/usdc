@@ -40,7 +40,9 @@ def kernel_status(slug: str) -> str:
     out = kaggle("kernels", "status", f"sewerted/{slug}", timeout=60)
     for line in out.splitlines():
         if "has status" in line:
-            return line.split("has status")[-1].strip()
+            raw = line.split("has status")[-1].strip()
+            # CLI 2.x отдаёт "KernelWorkerStatus.COMPLETE" — нормализуем
+            return raw.split(".")[-1].strip().lower()
     return out.strip()[:80]
 
 def main() -> None:
