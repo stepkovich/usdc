@@ -105,7 +105,7 @@ for i, name in enumerate(members, 1):
     X = X.replace([np.inf, -np.inf], np.nan)
     parts.append(X.dropna(subset=[c for c in X.columns if c not in ("fwd", "close")]))
     if i % 100 == 0:
-        print(f"признаки {i}/{len(files)}", flush=True)
+        print(f"признаки {i}/{len(members)}", flush=True)
 data = pd.concat(parts, ignore_index=True)
 del parts
 print("строк:", len(data), flush=True)
@@ -167,7 +167,7 @@ if verdict:
     m = lgb.LGBMClassifier(**PARAMS)
     m.fit(data[feats], data["y"], categorical_feature=["sym_id"])
     m.booster_.save_model("/kaggle/working/ml5h.txt")
-    syms = sorted({f.split("/")[-1].replace("_30m.csv", "") for f in files})
+    syms = sorted({m.split("/")[-1].replace("_30m.csv", "") for m in members})
     json.dump({"trained_at": str(pd.Timestamp.utcnow()),
                "features": feats, "symbols": syms, "gate": GATE,
                "hold_bars": H, "bar_minutes": 30, "universe": "wide-kaggle",
