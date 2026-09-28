@@ -255,7 +255,7 @@ class Executor:
                 kw = dict(symbol=symbol, side=NewOrderSideEnum[side].value,
                           type=NewOrderTypeEnum["MARKET"].value,
                           quantity=float(qty))
-                if self.hedge:
+                if self.hedge_mode:
                     kw["position_side"] = pos_side or self._pside(side)
                 r = self.client.rest_api.new_order(**kw)
                 return int(r.data().order_id)
