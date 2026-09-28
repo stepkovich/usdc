@@ -128,8 +128,9 @@ for k, qq in enumerate(test_q):
     d = d[d["p"] > GATE].sort_values(["sym_id", "ot"])
     kept, last = [], {}
     for row in d.itertuples():
-        if row.ot - last.get(row.Index, -10**18) >= COOLDOWN_MS:
-            kept.append(row); last[row.Index] = row.ot
+        # пауза ПО МОНЕТЕ (sym_id), не по индексу строки — иначе паузы нет
+        if row.ot - last.get(row.sym_id, -10**18) >= COOLDOWN_MS:
+            kept.append(row); last[row.sym_id] = row.ot
     t = pd.DataFrame(kept)
     if len(t) == 0:
         folds.append({"quarter": qq, "trades": 0, "avg": None}); continue
