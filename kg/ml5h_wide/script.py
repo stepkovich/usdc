@@ -16,8 +16,19 @@ PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
 
 def sym_id(sym): return np.uint16(zlib.crc32(sym.encode()) & 0xFFFF)
 
-files = sorted(glob.glob("/kaggle/input/usdc-panel-downloader/*.csv"))
-print("файлов панели:", len(files), flush=True)
+import os
+cands = glob.glob("/kaggle/input/**/*.csv", recursive=True)
+files = sorted(f for f in cands if f.endswith("_30m.csv"))
+print("input-дерево:", flush=True)
+for root, dirs, fs in os.walk("/kaggle/input"):
+    print(" ", root, len(fs), "файлов", flush=True)
+print("CSV 30м найдено:", len(files), flush=True)
+if len(files) < 500:
+    print("ПАНЕЛЬ НЕ ПРИШЛА — выход с диагностикой", flush=True)
+    json.dump({"verdict": False, "error": f"panel files {len(files)}",
+               "input_tree": str(os.listdir("/kaggle/input"))},
+              open("/kaggle/working/report.json", "w"), indent=1)
+    raise SystemExit(0)
 btc = None
 parts = []
 for i, f in enumerate(files, 1):
