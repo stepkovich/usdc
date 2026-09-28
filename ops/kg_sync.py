@@ -60,9 +60,9 @@ def main() -> None:
                           timeout=1800)
             out = out2 if "successfully" in out2.lower() else out
         print("dataset:", out.strip()[:120], flush=True)
-    # ---------- 2. LOB: кернел обучения ----------
+    # ---------- 2. LOB: кернел обучения (только если данных >= полдня) ----------
     kg_lob = Path("/root/kg/lob_trainer")
-    if kg_lob.exists():
+    if kg_lob.exists() and len(parquets) >= 12:
         out = kaggle("kernels", "push", "-p", str(kg_lob), timeout=120)
         print("push lob:", out.strip()[:120], flush=True)
         for _ in range(60):            # до 2 часов
