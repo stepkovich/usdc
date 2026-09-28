@@ -151,7 +151,10 @@ class Ml5hEngine:
         if time.time() - getattr(self, "_last_recon", 0) >= 600:
             self._last_recon = time.time()
             await self.recon()
-        if self.day_pnl <= -self.balance * self.cfg.daily_cap_pct:
+        day_cap = (min(self.c.day_cap_usdc, self.balance * self.cfg.daily_cap_pct)
+                   if self.c.day_cap_usdc > 0
+                   else self.balance * self.cfg.daily_cap_pct)
+        if self.day_pnl <= -day_cap:
             await self.manage()
             return
         await self.manage()
@@ -236,10 +239,18 @@ class Ml5hEngine:
                 log.info("сигнал %s p=%.3f — мимо порога", sym, p)
 
     # ---------- сделки ----------
+    def risk_budget(self) -> Decimal:
+        """Гибрид: денежный риск (если задан) с процентным потолком.
+        Демо-репетиция реала-100: риск 0.10 → позиции ~5 USDC."""
+        base = self.balance * self.c.risk_pct
+        if self.c.risk_usdc > 0:
+            return min(self.c.risk_usdc, base)
+        return base
+
     def notional(self) -> Decimal:
-        by_risk = self.balance * self.c.risk_pct / self.c.buffer_pct
+        by_risk = self.risk_budget() / self.c.buffer_pct
         by_cap = self.balance * self.c.notional_cap_pct
-        return min(by_risk, by_cap)
+        return max(min(by_risk, by_cap), Decimal("5"))   # пол = минимум биржи
 
     def qty_for(self, sym: str, px: Decimal) -> Decimal:
         """qty_for_notional принимает НОТИОНАЛ в USDT и сам делит на цену

@@ -227,11 +227,13 @@ class LobBot:
     def notional_for(self, spread_bp: float) -> Decimal:
         if self.balance <= 0:
             return Decimal(0)
-        risk = self.balance * RISK_PCT
+        base = self.balance * RISK_PCT
+        risk = (min(self.lob.risk_usdc, base)
+                if self.lob.risk_usdc > 0 else base)
         buffer = max(Decimal(str(spread_bp)) * 3,
                      Decimal("3")) / Decimal(10000)   # оценочный убыток
         notional = risk / buffer
-        return min(max(notional, MIN_NOTIONAL), MAX_NOTIONAL)
+        return min(max(notional, Decimal("5")), MAX_NOTIONAL)   # пол = минимум биржи
 
     def qty_for(self, sym: str, px: Decimal, notional: Decimal) -> Decimal:
         fl = self.filters.get(sym, {})
@@ -539,7 +541,11 @@ class LobBot:
                 if time.time() - getattr(self, "_last_recon", 0) >= 600:
                     self._last_recon = time.time()
                     self.recon()
-                if self.day_pnl <= -self.balance * Decimal("0.005"):
+                day_cap = (min(self.lob.day_cap_usdc,
+                               self.balance * Decimal("0.005"))
+                            if self.lob.day_cap_usdc > 0
+                            else self.balance * Decimal("0.005"))
+                if self.day_pnl <= -day_cap:
                     await asyncio.sleep(2)
                     continue
                 for sym in self.SYMS:

@@ -70,6 +70,8 @@ class ML5HConfig(BaseModel):
     exit_ttl_s: int = 90
     leverage: int = 3
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (MAE-исследование 28.09)
+    risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
+    day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
 
 
 class LobConfig(BaseModel):
@@ -91,6 +93,8 @@ class LobConfig(BaseModel):
     exit_ttl_s: int = 45
     leverage: int = 3
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (флеш-краш защита)
+    risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
+    day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
 
 
 class Config(BaseModel):
