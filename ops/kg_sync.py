@@ -98,11 +98,19 @@ def main() -> None:
             tg("📦 Панель 527 монет скачана на Кегл — стартует широкое "
                "переобучение (walk-forward + нуль-тест)")
     if (FLAGS / "panel_done").exists() and not (FLAGS / "wide_pushed").exists():
-        kg_wide = USDC / "kg" / "ml5h_wide"
-        if (kg_wide / "script.py").exists():
-            kaggle("kernels", "push", "-p", str(kg_wide), timeout=120)
-            (FLAGS / "wide_pushed").touch()
-            tg("🌙 Широкая модель: кернел запущен на Кегле")
+        # пушим широкую ТОЛЬКО когда загрузчик панели реально завершился
+        # (иначе повторяем старую ошибку: обучение на пустой панели)
+        dl_status = kernel_status("usdc-panel-downloader")
+        if dl_status != "complete":
+            print(f"панель ещё качается ({dl_status}) — wide отложен",
+                  flush=True)
+        else:
+            kg_wide = USDC / "kg" / "ml5h_wide"
+            if (kg_wide / "script.py").exists():
+                kaggle("kernels", "push", "-p", str(kg_wide), timeout=120)
+                (FLAGS / "wide_pushed").touch()
+                (FLAGS / "wide_done").unlink(missing_ok=True)
+                tg("🌙 Широкая модель: кернел запущен на Кегле")
     if (FLAGS / "wide_pushed").exists() and not (FLAGS / "wide_done").exists():
         st = kernel_status("usdc-ml5h-wide")
         print("wide status:", st, flush=True)
