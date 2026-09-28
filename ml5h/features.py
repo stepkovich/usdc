@@ -1,10 +1,17 @@
-"""Признаки ML-5Ч: 1:1 с тренировкой (verification/ml_train_baseline.py
-база + ml_step2_groups G-cross). ПАРИТЕТ ЖИВОГО И БЭКТЕСТНОГО РАСЧЁТА
+"""Признаки ML-5Ч: 1:1 с тренировкой (широкая модель на Кегле:
+база + G-cross + sym_id). ПАРИТЕТ ЖИВОГО И БЭКТЕСТНОГО РАСЧЁТА
 КРИТИЧЕН — функции копируются, не переписываются."""
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 import pandas as pd
+
+
+def sym_id(symbol: str) -> int:
+    """Метка монеты — та же формула, что в обучении (кегл-кернел)."""
+    return zlib.crc32(symbol.encode()) & 0xFFFF
 
 
 def make_features(df: pd.DataFrame, btc_close, symbol: str) -> pd.DataFrame:
@@ -80,6 +87,10 @@ def feature_row(df: pd.DataFrame, btc_close, symbol: str,
     for c in Xg.columns:
         X[c] = Xg[c]
     last = X.iloc[-2]        # -1 = формирующийся бар, берём -2
-    if last[feats].isna().any():
+    row = {f: float(last[f]) for f in feats if f in X.columns}
+    if "sym_id" in feats:
+        row["sym_id"] = float(sym_id(symbol))
+    missing = [f for f in feats if f not in row]
+    if missing:
         return None
-    return {f: float(last[f]) for f in feats}
+    return row
