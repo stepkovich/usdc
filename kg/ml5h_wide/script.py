@@ -113,12 +113,11 @@ feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot")]
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="Q")
 data["quarter"] = q.astype(str)
 quarters = sorted(data["quarter"].unique())
-# ПРЕДРЕГИСТРАЦИЯ v2 (до просмотра результата): 8 проверочных кварталов
-# РАВНОМЕРНО по всей истории — включая медвежьи 2021-2022. Критерии те же.
-step = max(1, len(quarters) // 8)
-test_q = quarters[::step][-8:]
-if quarters[-1] != test_q[-1]:
-    test_q[-1] = quarters[-1]
+# ПРЕДРЕГИСТРАЦИЯ v3 (до просмотра результата): 8 кварталов, индексы
+# np.linspace по ВСЕЙ истории 2021-2026 — медведь 2021-2022 включён.
+import numpy as _np
+idx = _np.linspace(0, len(quarters) - 1, 8).round().astype(int)
+test_q = [quarters[i] for i in idx]
 print("тестовые кварталы:", test_q, flush=True)
 all_trades, folds, nulls = [], [], []
 for k, qq in enumerate(test_q):
