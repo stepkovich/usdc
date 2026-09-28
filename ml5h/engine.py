@@ -153,6 +153,37 @@ class Ml5hEngine:
             return                    # ждём 5с после границы — честное закрытие
         self._last_bar_ms = bar_ms
         await self.on_bar()
+        # новые символы из обновлённой меты: тёплый старт истории
+        new = [s for s in self.symbols if s not in self.bars
+               and s not in getattr(self, "_warming", set())]
+        if new:
+            self._warming = getattr(self, "_warming", set()) | set(new)
+            try:
+                await self._warmup_new(new)
+            finally:
+                self._warming -= set(new)
+
+    async def _warmup_new(self, syms: list[str]) -> None:
+        """Тёплый старт для символов, появившихся с новой метой."""
+        log.info("прогрев %d новых символов...", len(syms))
+        for sym in syms:
+            rows = await asyncio.to_thread(
+                self.ex.fetch_klines, sym, "30m", self.c.warmup_bars)
+            rows = rows[:-1]
+            if len(rows) < 300:
+                continue
+            df = pd.DataFrame(rows, columns=KLINE_COLS)
+            for c in ("open", "high", "low", "close", "volume",
+                      "quote_volume", "taker_buy_base"):
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df["open_time"] = df["open_time"].astype(np.int64)
+            df.index = pd.to_datetime(df["open_time"], unit="ms")
+            self.bars[sym] = df[["open_time", "open", "high", "low", "close",
+                                 "volume", "quote_volume",
+                                 "taker_buy_base"]]
+        btc = self.bars.get("BTCUSDT")
+        self.btc_close = btc["close"] if btc is not None else None
+        log.info("прогрев завершён: %d символов в работе", len(self.bars))
 
     async def on_bar(self) -> None:
         for sym in self.symbols:
