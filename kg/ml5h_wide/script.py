@@ -144,7 +144,9 @@ for k, qq in enumerate(test_q):
     avg = float(t["pnl"].mean() * 100)
     folds.append({"quarter": qq, "trades": len(t), "avg": round(avg, 4)})
     print(f"фолд {qq}: {len(t)} сделок, {avg:+.4f}%", flush=True)
-    if k >= 6 and len(t):
+    # нуль-тест по КАЖДОМУ тестовому кварталу (а не только последним двум —
+    # это была недоделка реализации, сужавшая сравнение до бычьих окон)
+    if len(t):
         rng = np.random.default_rng(7)
         nl = []
         for _ in range(50):
