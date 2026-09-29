@@ -8,6 +8,8 @@ import time
 import logging
 from decimal import Decimal
 
+from decimal import ROUND_DOWN, ROUND_UP
+
 from binance_common.configuration import ConfigurationRestAPI
 from binance_common.errors import Error as BinanceError
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
@@ -141,6 +143,18 @@ class Executor:
             log.warning("margin_type %s: %s", symbol, e)
 
     # ---------- ордера ----------
+    def _grid(self, symbol: str, price, side: str):
+        """Цена строго на тик-сетке монеты: BUY вниз, SELL вверх
+        (не пересекать спред). Лечит -4014 'not increased by tick size'."""
+        fl = self.filters.get(symbol)
+        if fl is None or price is None:
+            return price
+        d = price if isinstance(price, Decimal) else Decimal(str(price))
+        tick = getattr(fl, "tick_size", None) or Decimal("0.0001")
+        q = (d / tick).to_integral_value(
+            rounding=ROUND_DOWN if side == "BUY" else ROUND_UP) * tick
+        return q if q > 0 else d
+
     @staticmethod
     def _plain(v) -> str:
         """Обычная десятичная запись: 9.8e-06 -> '0.0000098'. Биржа
@@ -162,7 +176,8 @@ class Executor:
                 type=NewOrderTypeEnum["LIMIT"].value,
                 position_side=self._pside(side),
                 time_in_force=NewOrderTimeInForceEnum[tif].value,
-                quantity=self._plain(qty), price=self._plain(price),
+                quantity=self._plain(qty),
+                price=self._plain(self._grid(symbol, price, side)),
                 new_client_order_id=client_id)
         except BinanceError as e:
             if post_only and api_code(e) in (-4131, -5022):
@@ -191,7 +206,8 @@ class Executor:
                     side=NewOrderSideEnum[side].value,
                     type=NewOrderTypeEnum["LIMIT"].value,
                     time_in_force=NewOrderTimeInForceEnum["GTC"].value,
-                    quantity=self._plain(qty), price=self._plain(price),
+                    quantity=self._plain(qty),
+                    price=self._plain(self._grid(symbol, price, side)),
                     new_client_order_id=client_id if attempt == 0 else f"{client_id}r{attempt}")
                 if self.hedge_mode:
                     # pos_side = сторона ПОЗИЦИИ, обязательна. Фолбэк на сторону

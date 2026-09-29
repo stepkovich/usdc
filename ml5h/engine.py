@@ -230,19 +230,31 @@ class Ml5hEngine:
                 continue
             if slots >= self.c.max_slots:
                 break
-            x = await asyncio.to_thread(feature_row, self.bars[sym],
-                                        self.btc_close, sym, self.feats)
-            if not x:
+            try:
+                x = await asyncio.to_thread(feature_row, self.bars[sym],
+                                            self.btc_close, sym, self.feats)
+                if not x:
+                    continue
+                p = float(self.model.predict(
+                    np.array([[x[f] for f in self.feats]]))[0])
+            except Exception as e:
+                log.warning("%s: ошибка оценки (%s) — символ исключён",
+                            sym, str(e)[:60])
                 continue
-            p = float(self.model.predict(np.array([[x[f] for f in self.feats]]))[0])
-            if p > self.c.gate:
-                await self.open_long(sym, p)
-                slots += 1
-            elif p < 1 - self.c.gate:
-                await self.open_short(sym, p)
-                slots += 1
-            else:
-                log.info("сигнал %s p=%.3f — мимо порога", sym, p)
+            try:
+                if p > self.c.gate:
+                    await self.open_long(sym, p)
+                    slots += 1
+                elif p < 1 - self.c.gate:
+                    await self.open_short(sym, p)
+                    slots += 1
+                else:
+                    log.info("сигнал %s p=%.3f — мимо порога", sym, p)
+            except BinanceError as e:
+                from bot.executor import api_code
+                log.warning("%s: биржа отказала (%s) — сигнал пропущен",
+                            sym, str(e)[:80])
+                continue
 
     # ---------- сделки ----------
     def risk_budget(self) -> Decimal:
