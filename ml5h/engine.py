@@ -307,10 +307,19 @@ class Ml5hEngine:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
         if maker and top:
             _bb, ba = top
-            oid = await asyncio.to_thread(
-                self.ex.place_tp_limit, sym, "SELL", Decimal(str(ba)),
-                pos["qty"], f"ml5x-{sym}-{int(time.time())}",
-                pos_side="LONG" if self.ex.hedge_mode else None)
+            try:
+                oid = await asyncio.to_thread(
+                    self.ex.place_tp_limit, sym, "SELL", Decimal(str(ba)),
+                    pos["qty"], f"ml5x-{sym}-{int(time.time())}",
+                    pos_side="LONG" if self.ex.hedge_mode else None)
+            except BinanceError as e:
+                if api_code(e) == -2022:
+                    # позиции на бирже уже нет (закрыта вне цикла/ранее)
+                    log.warning("%s: -2022 при выходе — позиция уже закрыта, "
+                                "снимаю с учёта", sym)
+                    self.pos.pop(sym, None)
+                    return
+                raise
             if oid is not None:
                 pos["exit_oid"] = oid
                 pos["exit_deadline"] = time.time() + self.c.exit_ttl_s

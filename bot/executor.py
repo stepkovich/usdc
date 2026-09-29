@@ -202,7 +202,9 @@ class Executor:
                 oid = int(r.data().order_id)
                 break
             except BinanceError as e:
-                if api_code(e) in (-2022, -4509, -1021) and attempt < 3:
+                if api_code(e) in (-4509, -1021) and attempt < 3:
+                    # -2022 (ReduceOnly) сюда НЕ входит: позиции нет —
+                    # это окончательный ответ, ретраить бессмысленно
                     if api_code(e) == -1021:
                         # часы разошлись с биржей — внеплановый ресинк и повтор
                         # (функция синхронная, крутится в to_thread — блокировка ок)
