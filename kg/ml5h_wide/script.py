@@ -1,4 +1,11 @@
-"""Кегл-кернел: ШИРОКАЯ ML5H (все монеты панели + метка монеты).
+"""Кегл-кернел: ШИРОКАЯ ML5H v2 (предрегистрация 29.09 до запуска):
+1) ЯРЛЫК = реализованная сделка при нашем исполнении: вход close×(1+slip),
+   аварийный выход -15% (min low холда <= стоп-уровень), иначе выход
+   close[t+10]×(1-slip); минус комиссии. y = pnl > 0. Модель учится отвечать
+   на вопрос "приведёт ли МОЯ сделка к деньгам", а не "вырастет ли цена".
+2) Контекст BTC восстановлен (btc preload - в прошлом прогоне терялся).
+3) Экзамен v2 без изменений: навык (топ-квинтиль минус боттом) > 0 в >=6/8
+   кварталов И средний >= +0.20%. Деплой только при сдаче.
 Вход: output кернела usdc-panel-downloader (527 CSV 30м, 2 года).
 Walk-forward 8 кварталов + нуль-тест; критерии деплоя жёсткие и
 записаны заранее: средняя >= +0.10%, нуль-перцентиль >= 95,
@@ -28,12 +35,16 @@ if not zips:
     raise SystemExit(0)
 zf = zipfile.ZipFile(zips[0])
 members = [n for n in zf.namelist() if n.endswith("_30m.csv")]
+btc_pre = pd.read_csv(io.BytesIO(zf.read("BTCUSDT_30m.csv")),
+                      usecols=["open_time", "close"])
+btc_pre["open_time"] = btc_pre["open_time"].astype(np.int64)
+btc_pre.index = pd.to_datetime(btc_pre["open_time"], unit="ms")
+btc = btc_pre["close"].astype("float32")
 print("монет в панели:", len(members), flush=True)
 if len(members) < 500:
     json.dump({"verdict": False, "error": f"panel members {len(members)}"},
               open("/kaggle/working/report.json", "w"), indent=1)
     raise SystemExit(0)
-btc = None
 parts = []
 for i, name in enumerate(members, 1):
     sym = name.replace("_30m.csv", "")
@@ -96,10 +107,23 @@ for i, name in enumerate(members, 1):
         for c in ("rel_ret_20", "rel_ret_60", "beta_20", "corr_20"):
             X[c] = np.float32(0)
     X["sym_id"] = sym_id(sym)
-    fwd = np.full(len(df), np.nan, dtype="float32")
-    fwd[:-H] = (close.values[H:] / close.values[:-H] - 1).astype("float32")
-    X["y"] = np.where(np.isnan(fwd), np.nan, (fwd > 0).astype("float32"))
-    X["fwd"] = fwd
+    # реализованная сделка: вход close×(1+slip), стоп -15%, выход close[t+10]
+    lows = df["low"].values.astype("float32")
+    entry = close.values * (1 + SLIP)
+    stop_px = entry * (1 - 0.15)
+    fut_low = np.full(len(df), np.inf, dtype="float32")
+    for k in range(1, H + 1):
+        fut_low[:-k] = np.minimum(fut_low[:-k], lows[k:])
+    fut_close = np.full(len(df), np.nan, dtype="float32")
+    fut_close[:-H] = close.values[H:]
+    stop_hit = fut_low <= stop_px
+    exit_p = np.where(stop_hit, stop_px * (1 - SLIP),
+                      fut_close * (1 - SLIP))
+    pnl_lbl = exit_p / entry - 1 - FEE2
+    X["y"] = np.where(np.isnan(fut_close), np.nan,
+                      (pnl_lbl > 0).astype("float32"))
+    X["pnl_lbl"] = pnl_lbl
+    X["fwd"] = (fut_close / close.values - 1).astype("float32")
     X["close"] = close.values
     X["ot"] = df["open_time"].values
     X = X.replace([np.inf, -np.inf], np.nan)
@@ -109,7 +133,7 @@ for i, name in enumerate(members, 1):
 data = pd.concat(parts, ignore_index=True)
 del parts
 print("строк:", len(data), flush=True)
-feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot")]
+feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot", "low", "pnl_lbl")]
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="Q")
 data["quarter"] = q.astype(str)
 quarters = sorted(data["quarter"].unique())
@@ -138,9 +162,7 @@ for k, qq in enumerate(test_q):
     t = pd.DataFrame(kept)
     if len(t) == 0:
         folds.append({"quarter": qq, "trades": 0, "avg": None}); continue
-    entry = t["close"].values * (1 + SLIP)
-    exit_p = t["close"].values * (1 + t["fwd"].values) * (1 - SLIP)
-    t["pnl"] = exit_p / entry - 1 - FEE2
+    t["pnl"] = t["pnl_lbl"].values   # реализованный pnl (со стопом и комиссиями)
     avg = float(t["pnl"].mean() * 100)
     folds.append({"quarter": qq, "trades": len(t), "avg": round(avg, 4)})
     print(f"фолд {qq}: {len(t)} сделок, {avg:+.4f}%", flush=True)
