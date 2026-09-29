@@ -46,6 +46,21 @@ def kernel_status(slug: str) -> str:
     return out.strip()[:80]
 
 def main() -> None:
+    # защита от наложения запусков (часовой cron, кернел ждёт до 2ч)
+    lock = Path("/root/kg/kg_sync.lock")
+    if lock.exists():
+        import time as _t
+        if _t.time() - lock.stat().st_mtime < 7200:
+            print("предыдущий sync ещё работает — выхожу", flush=True)
+            return
+        lock.unlink()
+    lock.write_text(str(time.time()))
+    try:
+        _main()
+    finally:
+        lock.unlink(missing_ok=True)
+
+def _main() -> None:
     FLAGS.mkdir(parents=True, exist_ok=True)
     # ---------- 1. LOB: данные -> Кегл ----------
     parquets = sorted(glob.glob(str(LOB_ARCHIVE / "*.parquet")))
