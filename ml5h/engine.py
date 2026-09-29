@@ -55,7 +55,25 @@ class Ml5hEngine:
         self._last_bar_ms = 0
 
     # ---------- запуск ----------
+    def _seed_model(self) -> None:
+        """Первый запуск на чистом сервере: модель из образа едет на том
+        данных (дальше живёт там и обновляется без пересборки)."""
+        if self.c.model_path.exists() and self.c.meta_path.exists():
+            return
+        self.c.model_path.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        base = Path(__file__).resolve().parent.parent / "models"
+        src_m, src_j = base / "ml5h.txt", base / "ml5h_meta.json"
+        if not (src_m.exists() and src_j.exists()):
+            raise RuntimeError(
+                "модель не найдена ни на томе данных, ни в образе — "
+                "положи ml5h.txt и ml5h_meta.json в data/models/")
+        shutil.copy(src_m, self.c.model_path)
+        shutil.copy(src_j, self.c.meta_path)
+        log.info("модель засеяна из образа на том данных")
+
     async def setup(self) -> None:
+        self._seed_model()
         meta = json.loads(self.c.meta_path.read_text())
         self.feats = meta["features"]
         self.symbols = self.c.symbols or meta["symbols"]
