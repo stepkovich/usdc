@@ -29,6 +29,9 @@ from ml5h.features import feature_row
 
 log = logging.getLogger("ml5h")
 
+MIN_PRICE = Decimal("0.0001")   # ниже — цена не сериализуется в API
+                                # без «научной записи», биржа даёт -1102
+
 KLINE_COLS = ["open_time", "open", "high", "low", "close", "volume",
               "close_time", "quote_volume", "n", "taker_buy_base",
               "taker_buy_quote", "ignore"]
@@ -95,6 +98,16 @@ class Ml5hEngine:
                                  "taker_buy_base"]]
         btc = self.bars.get("BTCUSDT")
         self.btc_close = btc["close"] if btc is not None else None
+        # сверхдешёвые монеты: цена не проходит сериализацию API (-1102)
+        dead = [s for s in list(self.bars)
+                if float(self.bars[s]["close"].iloc[-1]) < float(MIN_PRICE)]
+        for s in dead:
+            self.bars.pop(s, None)
+            if s in self.symbols:
+                self.symbols.remove(s)
+        if dead:
+            log.info("исключены сверхдешёвые (цена <%s): %s",
+                     MIN_PRICE, ", ".join(dead))
 
     # ---------- цикл ----------
     async def run(self) -> None:
@@ -268,6 +281,8 @@ class Ml5hEngine:
         if not top:
             return
         bb, _ba = top
+        if bb < float(MIN_PRICE):
+            return
         df = self.bars[sym]
         tick = float(df["close"].iloc[-1]) * 0  # цена — с биржи, не из баров
         qty = self.qty_for(sym, Decimal(str(bb)))
@@ -312,6 +327,8 @@ class Ml5hEngine:
         if not top:
             return
         _bb, ba = top
+        if ba < float(MIN_PRICE):
+            return
         qty = self.qty_for(sym, Decimal(str(ba)))
         if qty <= 0:
             log.warning("%s: лот не сошёлся — символ исключён", sym)
