@@ -17,7 +17,10 @@ FEATS = ["spread_bp", "microprice_rel", "imb5", "imb10", "imb20",
 frames = []
 for f in sorted(glob.glob("/kaggle/input/usdc-lob-features/**/*.parquet",
                           recursive=True)):
-    frames.append(pd.read_parquet(f))
+    try:
+        frames.append(pd.read_parquet(f))
+    except Exception:
+        print("битый файл пропущен:", f, flush=True)
 df = pd.concat(frames, ignore_index=True).drop_duplicates(["ts", "symbol"]) \
        .sort_values(["symbol", "ts"]).reset_index(drop=True)
 print(f"строк {len(df)}, символов {df['symbol'].nunique()}", flush=True)

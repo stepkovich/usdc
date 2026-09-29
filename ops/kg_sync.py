@@ -64,6 +64,12 @@ def _main() -> None:
     FLAGS.mkdir(parents=True, exist_ok=True)
     # ---------- 1. LOB: данные -> Кегл ----------
     parquets = sorted(glob.glob(str(LOB_ARCHIVE / "*.parquet")))
+    # битые (недописанные) файлы ломают датасет — сносим до загрузки
+    for p in list(parquets):
+        if os.path.getsize(p) < 1024:
+            os.remove(p)
+            parquets.remove(p)
+            print("удалён битый паркет:", os.path.basename(p), flush=True)
     if len(parquets) >= 12:            # хотя бы полдня данных
         meta = {"title": "USDC LOB features",
                 "id": "sewerted/usdc-lob-features",
