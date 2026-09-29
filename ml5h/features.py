@@ -86,7 +86,10 @@ def feature_row(df: pd.DataFrame, btc_close, symbol: str,
     Xg = g_cross(df, btc_close, symbol)
     for c in Xg.columns:
         X[c] = Xg[c]
-    last = X.iloc[-2]        # -1 = формирующийся бар, берём -2
+    # БАРЫ В df ТОЛЬКО ЗАКРЫТЫЕ (прогрев и поток отбрасывают формирующуюся
+    # свечу) — свежая закрытая = iloc[-1]. Исторический урок 29.09: iloc[-2]
+    # оставшийся от старой конструкции давал модели данные на бар старее.
+    last = X.iloc[-1]
     row = {f: float(last[f]) for f in feats if f in X.columns}
     if "sym_id" in feats:
         row["sym_id"] = float(sym_id(symbol))
