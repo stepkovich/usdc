@@ -98,16 +98,6 @@ class Ml5hEngine:
                                  "taker_buy_base"]]
         btc = self.bars.get("BTCUSDT")
         self.btc_close = btc["close"] if btc is not None else None
-        # сверхдешёвые монеты: цена не проходит сериализацию API (-1102)
-        dead = [s for s in list(self.bars)
-                if float(self.bars[s]["close"].iloc[-1]) < float(MIN_PRICE)]
-        for s in dead:
-            self.bars.pop(s, None)
-            if s in self.symbols:
-                self.symbols.remove(s)
-        if dead:
-            log.info("исключены сверхдешёвые (цена <%s): %s",
-                     MIN_PRICE, ", ".join(dead))
 
     # ---------- цикл ----------
     async def run(self) -> None:
@@ -281,7 +271,7 @@ class Ml5hEngine:
         if not top:
             return
         bb, _ba = top
-        if bb < float(MIN_PRICE):
+        if bb <= 0:
             return
         df = self.bars[sym]
         tick = float(df["close"].iloc[-1]) * 0  # цена — с биржи, не из баров
@@ -327,7 +317,7 @@ class Ml5hEngine:
         if not top:
             return
         _bb, ba = top
-        if ba < float(MIN_PRICE):
+        if ba <= 0:
             return
         qty = self.qty_for(sym, Decimal(str(ba)))
         if qty <= 0:
