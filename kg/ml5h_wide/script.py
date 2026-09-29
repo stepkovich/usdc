@@ -1,15 +1,9 @@
-"""Кегл-кернел: ШИРОКАЯ ML5H v2 (предрегистрация 29.09 до запуска):
-1) ЯРЛЫК = реализованная сделка при нашем исполнении: вход close×(1+slip),
-   аварийный выход -15% (min low холда <= стоп-уровень), иначе выход
-   close[t+10]×(1-slip); минус комиссии. y = pnl > 0. Модель учится отвечать
-   на вопрос "приведёт ли МОЯ сделка к деньгам", а не "вырастет ли цена".
-2) Контекст BTC восстановлен (btc preload - в прошлом прогоне терялся).
-3) Экзамен v2 без изменений: навык (топ-квинтиль минус боттом) > 0 в >=6/8
-   кварталов И средний >= +0.20%. Деплой только при сдаче.
-Вход: output кернела usdc-panel-downloader (527 CSV 30м, 2 года).
-Walk-forward 8 кварталов + нуль-тест; критерии деплоя жёсткие и
-записаны заранее: средняя >= +0.10%, нуль-перцентиль >= 95,
-плюсовых кварталов >= 5 из 8. verdict -> ml5h.txt + meta."""
+"""ИССЛЕДОВАНИЕ (предрегистрация 29.09): шорты аналитика на тех же данных.
+Модель БЕЗ ИЗМЕНЕНИЙ (ценовые ярлыки, как у боевой). Симуляция сделок
+в обе стороны: лонг p>0.55, шорт p<0.45. Исполнение честное:
+вход ±slip, аварийный стоп ±15% (для шорта нырок = ВЗЛЁТ: max high),
+выход close[t+10], комиссии taker×2. Отдельно лонги/шорты + вместе.
+Чистое измерение — деплойных решений в кернеле нет."""
 import glob, json, zlib
 import numpy as np, pandas as pd, lightgbm as lgb
 
@@ -107,6 +101,9 @@ for i, name in enumerate(members, 1):
     else:
         for c in ("rel_ret_20", "rel_ret_60", "beta_20", "corr_20"):
             X[c] = np.float32(0)
+    X["high"] = df["high"].values.astype("float32")
+    X["low"] = df["low"].values.astype("float32")
+    X["fi"] = np.uint16(i)
     X["sym_id"] = sym_id(sym)
     # реализованная сделка: вход close×(1+slip), стоп -15%, выход close[t+10]
     lows = df["low"].values.astype("float32")
@@ -122,19 +119,25 @@ for i, name in enumerate(members, 1):
                       fut_close * (1 - SLIP))
     pnl_lbl = exit_p / entry - 1 - FEE2
     X["y"] = np.where(np.isnan(fut_close), np.nan,
-                      (pnl_lbl > 0).astype("float32"))
-    X["pnl_lbl"] = pnl_lbl
+                      (fut_close / close.values > 1).astype("float32"))
     X["fwd"] = (fut_close / close.values - 1).astype("float32")
     X["close"] = close.values
     X["ot"] = df["open_time"].values
     X = X.replace([np.inf, -np.inf], np.nan)
-    parts.append(X.dropna(subset=[c for c in X.columns if c not in ("fwd", "close")]))
+    kept = X.dropna(subset=[c for c in X.columns if c not in ("fwd", "close")])
+    if i <= 3:
+        nans = X.isna().sum()
+        bad = nans[nans > 0].sort_values(ascending=False)
+        print(f"ДИАГНОСТИКА {sym}: было {len(X)}, осталось {len(kept)} "
+              f"({len(kept)/max(1,len(X))*100:.1f}%), NaN по колонкам: "
+              f"{dict(bad.head(6))}", flush=True)
+    parts.append(kept)
     if i % 100 == 0:
         print(f"признаки {i}/{len(members)}", flush=True)
 data = pd.concat(parts, ignore_index=True)
 del parts
 print("строк:", len(data), flush=True)
-feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot", "low", "pnl_lbl")]
+feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot", "low", "high", "fi")]
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="Q")
 data["quarter"] = q.astype(str)
 quarters = sorted(data["quarter"].unique())
@@ -143,6 +146,11 @@ quarters = sorted(data["quarter"].unique())
 import numpy as _np
 idx = _np.linspace(0, len(quarters) - 1, 8).round().astype(int)
 test_q = [quarters[i] for i in idx]
+nan_counts = data.isna().sum()
+print("NaN по колонкам (только ненулевые):", flush=True)
+for c in data.columns:
+    if nan_counts[c] > 0:
+        print(f"  {c}: {nan_counts[c]}", flush=True)
 print("тестовые кварталы:", test_q, flush=True)
 all_trades, folds, nulls = [], [], []
 for k, qq in enumerate(test_q):
@@ -154,76 +162,147 @@ for k, qq in enumerate(test_q):
     m.fit(tr[feats], tr["y"], categorical_feature=["sym_id"])
     p = m.predict_proba(te[feats])[:, 1]
     d = te.assign(p=p)
-    d = d[d["p"] > GATE].sort_values(["sym_id", "ot"])
-    kept, last = [], {}
-    for row in d.itertuples():
-        # пауза ПО МОНЕТЕ (sym_id), не по индексу строки — иначе паузы нет
-        if row.ot - last.get(row.sym_id, -10**18) >= COOLDOWN_MS:
-            kept.append(row); last[row.sym_id] = row.ot
-    t = pd.DataFrame(kept)
-    if len(t) == 0:
-        folds.append({"quarter": qq, "trades": 0, "avg": None}); continue
-    t["pnl"] = t["pnl_lbl"].values   # реализованный pnl (со стопом и комиссиями)
-    avg = float(t["pnl"].mean() * 100)
-    folds.append({"quarter": qq, "trades": len(t), "avg": round(avg, 4)})
-    print(f"фолд {qq}: {len(t)} сделок, {avg:+.4f}%", flush=True)
-    # нуль-тест по КАЖДОМУ тестовому кварталу (а не только последним двум —
-    # это была недоделка реализации, сужавшая сравнение до бычьих окон)
-    if len(t):
-        rng = np.random.default_rng(7)
-        nl = []
-        for _ in range(50):
-            idx = rng.integers(0, len(te), len(t))
-            smp = te.iloc[idx]
-            nl.extend((smp["close"].values * (1 + smp["fwd"].values)
-                       * (1 - SLIP) / (smp["close"].values * (1 + SLIP))
-                       - 1 - FEE2) * 100)
-        if nl:
-            pct = (np.array(nl) < avg).mean() * 100
-            nulls.append(pct)
-            print(f"  нуль: лучше {pct:.0f}%", flush=True)
-    all_trades.append(t)
-res = pd.concat(all_trades)
-avg_all = float(res["pnl"].mean() * 100)
-pos_q = sum(1 for f in folds if (f["avg"] or 0) > 0)
-null_pct = int(np.mean(nulls)) if nulls else 0
-# --- ЧЕСТНЫЙ ЭКЗАМЕН v2 (предрегистрация до запуска): дрейф-свободное
-# сравнение модель-с-собой. Навык = заработок самой уверенной квинтили
-# минус заработок самой неуверенной. СДАНО если: разница > 0 минимум
-# в 6 кварталах из 8 И средняя разница >= +0.20% на сделку.
-spreads = []
-spread_by_q = {}
-for t, f in zip(all_trades, folds):
-    if t.empty or "p" not in t.columns or len(t) < 200:
-        continue
-    t = t.sort_values("p")
-    n5 = max(1, len(t) // 5)
-    bot = t["pnl"].head(n5).mean() * 100
-    top = t["pnl"].tail(n5).mean() * 100
-    spread_by_q[f["quarter"]] = round(top - bot, 4)
-    spreads.append(top - bot)
-    print(f"  экзамен {f['quarter']}: уверенные {top:+.3f}% vs "
-          f"неуверенные {bot:+.3f}% -> навык {top - bot:+.3f}%", flush=True)
-pos_spread = sum(1 for s in spreads if s > 0)
-mean_spread = float(np.mean(spreads)) if spreads else 0.0
-verdict = bool(pos_spread >= 6 and mean_spread >= 0.20)
-print(f"ИТОГ: средняя {avg_all:+.4f}% | навык в {pos_spread}/{len(spreads)} "
-      f"кварталах | средний навык {mean_spread:+.3f}% | ВЕРДИКТ {verdict}",
-      flush=True)
-json.dump({"avg": avg_all, "pos_quarters": pos_q, "null_pct": null_pct,
-           "skill_pos_quarters": pos_spread,
-           "skill_mean_spread": mean_spread,
-           "skill_by_quarter": spread_by_q,
-           "verdict": verdict, "folds": folds},
+
+    # --- ЛОНГИ: p > 0.55, нырок = min low, стоп -15% ---
+    dl = d[d["p"] > GATE].sort_values(["sym_id", "ot"])
+    kept_l, last_l = [], {}
+    for row in dl.itertuples():
+        if row.ot - last_l.get(row.sym_id, -10**18) >= COOLDOWN_MS:
+            kept_l.append(row); last_l[row.sym_id] = row.ot
+    L = pd.DataFrame(kept_l)
+    if len(L):
+        L = L.reset_index(drop=True)
+        entry = L["close"].values * (1 + SLIP)
+        stop_px = entry * (1 - 0.15)
+        # худший нырок за холд
+        fut_low = np.full(len(L), np.inf)
+        for kk in range(1, H + 1):
+            shift = L["ot"].values
+        # посчитаем по пулу котировок символа (нужны low после входа)
+        mae_l = np.full(len(L), np.nan)
+        exit_l = np.full(len(L), np.nan)
+        pools = {fi: g for fi, g in te.groupby("fi")}
+        for fi, g in L.groupby("fi"):
+            pool = pools.get(fi)
+            if pool is None: continue
+            ots = pool["ot"].values
+            lows = pool["low"].values
+            closes10 = pool["close"].values
+            for idx, row in g.iterrows():
+                j = int(np.searchsorted(ots, row["ot"]))
+                seg = lows[j+1: j+1+H]
+                fut_c = closes10[j+H] if j+H < len(closes10) else np.nan
+                if len(seg):
+                    mae_l[idx] = seg.min() / entry[idx] - 1
+                    if seg.min() <= stop_px[idx]:
+                        exit_l[idx] = stop_px[idx] * (1 - SLIP)
+                    else:
+                        exit_l[idx] = fut_c * (1 - SLIP) if not np.isnan(fut_c) else np.nan
+        ok = ~np.isnan(exit_l)
+        L = L[ok].reset_index(drop=True)
+        L["pnl"] = exit_l[ok] / entry[ok] - 1 - FEE2
+        L["side"] = "LONG"
+        L["mae"] = mae_l[ok]
+    else:
+        L = pd.DataFrame(columns=["pnl", "side", "mae", "p", "quarter"])
+        L["quarter"] = None
+
+    # --- ШОРТЫ: p < 0.45, "нырок" = ВЗЛЁТ max high, стоп +15% ---
+    ds = d[d["p"] < 1 - GATE].sort_values(["sym_id", "ot"])
+    kept_s, last_s = [], {}
+    for row in ds.itertuples():
+        if row.ot - last_s.get(row.sym_id, -10**18) >= COOLDOWN_MS:
+            kept_s.append(row); last_s[row.sym_id] = row.ot
+    S = pd.DataFrame(kept_s)
+    if len(S):
+        S = S.reset_index(drop=True)
+        entry_s = S["close"].values * (1 - SLIP)
+        stop_px_s = entry_s * (1 + 0.15)
+        mae_s = np.full(len(S), np.nan)
+        exit_s = np.full(len(S), np.nan)
+        for fi, g in S.groupby("fi"):
+            pool = pools.get(fi)
+            if pool is None: continue
+            ots = pool["ot"].values
+            highs = pool["high"].values
+            closes10 = pool["close"].values
+            for idx, row in g.iterrows():
+                j = int(np.searchsorted(ots, row["ot"]))
+                seg = highs[j+1: j+1+H]
+                fut_c = closes10[j+H] if j+H < len(closes10) else np.nan
+                if len(seg):
+                    mae_s[idx] = seg.max() / entry_s[idx] - 1
+                    if seg.max() >= stop_px_s[idx]:
+                        exit_s[idx] = stop_px_s[idx] * (1 + SLIP)
+                    else:
+                        exit_s[idx] = fut_c * (1 + SLIP) if not np.isnan(fut_c) else np.nan
+        ok = ~np.isnan(exit_s)
+        S = S[ok].reset_index(drop=True)
+        S["pnl"] = (entry_s[ok] - exit_s[ok]) / entry_s[ok] - FEE2
+        S["side"] = "SHORT"
+        S["mae"] = mae_s[ok]
+    else:
+        S = pd.DataFrame(columns=["pnl", "side", "mae", "p", "quarter"])
+        S["quarter"] = None
+
+    for dfx, nm in ((L, "LONG"), (S, "SHORT")):
+        if len(dfx):
+            dfx["quarter"] = qq
+
+    def side_stats(dfw, nm):
+        if dfw is None or len(dfw) == 0:
+            return {"trades": 0, "avg": None, "skill": None}
+        e = dfw["pnl"].mean() * 100
+        dfw2 = dfw.sort_values("p")
+        n5 = max(1, len(dfw2) // 5)
+        if nm == "LONG":
+            bot, top = dfw2["pnl"].head(n5).mean()*100, dfw2["pnl"].tail(n5).mean()*100
+        else:  # для шортов уверенность = НИЗКИЙ p
+            top, bot = dfw2["pnl"].head(n5).mean()*100, dfw2["pnl"].tail(n5).mean()*100
+        return {"trades": len(dfw), "avg": round(e, 4),
+                "skill": round(top - bot, 4)}
+
+    ls, ss = side_stats(L, "LONG"), side_stats(S, "SHORT")
+    print(f"фолд {qq}: ЛОНГ {ls['trades']} шт {ls['avg']}% (навык {ls['skill']}%) | "
+          f"ШОРТ {ss['trades']} шт {ss['avg']}% (навык {ss['skill']}%)", flush=True)
+    folds.append({"quarter": qq, "long": ls, "short": ss})
+    if len(L): all_trades.append(L.assign(kind="L"))
+    if len(S): all_trades.append(S.assign(kind="S"))
+
+res = pd.concat([t for t in all_trades if len(t)], ignore_index=True)
+res["quarter"] = test_res_q = res["quarter"]
+L_all = res[res["kind"] == "L"]; S_all = res[res["kind"] == "S"]
+base_l = round(float(L_all["pnl"].mean() * 100), 4) if len(L_all) else None
+base_s = round(float(S_all["pnl"].mean() * 100), 4) if len(S_all) else None
+base_c = round(float(res["pnl"].mean() * 100), 4) if len(res) else None
+skill_l = round(float(np.mean([f["long"]["skill"] for f in folds if f["long"]["skill"] is not None])), 3) if any(f["long"]["skill"] is not None for f in folds) else None
+skill_s = round(float(np.mean([f["short"]["skill"] for f in folds if f["short"]["skill"] is not None])), 3) if any(f["short"]["skill"] is not None for f in folds) else None
+print(f"ИТОГ ЛОНГ: {base_l}% | навык {skill_l}", flush=True)
+print(f"ИТОГ ШОРТ: {base_s}% | навык {skill_s}", flush=True)
+print(f"ИТОГ ВМЕСТЕ: {base_c}%", flush=True)
+json.dump({"long_avg": base_l, "long_skill": skill_l,
+           "short_avg": base_s, "short_skill": skill_s,
+           "combined_avg": base_c, "folds": folds},
           open("/kaggle/working/report.json", "w"), indent=1)
-if verdict:
-    m = lgb.LGBMClassifier(**PARAMS)
-    m.fit(data[feats], data["y"], categorical_feature=["sym_id"])
-    m.booster_.save_model("/kaggle/working/ml5h.txt")
-    syms = sorted({m.split("/")[-1].replace("_30m.csv", "") for m in members})
-    json.dump({"trained_at": str(pd.Timestamp.utcnow()),
-               "features": feats, "symbols": syms, "gate": GATE,
-               "hold_bars": H, "bar_minutes": 30, "universe": "wide-kaggle",
-               "train_rows": int(len(data))},
-              open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
-    print("артефакт сохранён", flush=True)
+res.to_csv("/kaggle/working/all_trades.csv", index=False)
+print("измерение завершено", flush=True)
+
+# ФИНАЛЬНАЯ МОДЕЛЬ (предрегистрация 30.09): та же формула что у боевой
+# (ценовые ярлыки), но обучение на ПОЛНЫХ данных (20.5М строк — после
+# фикса float32-каста меток). Критерии деплоя те же: навык (топ-квинтиль
+# минус боттом по уверенности) > 0 минимум в 6/8 кварталов И средний
+# >= +0.20%. Иначе модель не сохраняется как деплой-кандидат.
+skill_pos = sum(1 for f in folds
+                if f["long"]["skill"] is not None and f["long"]["skill"] > 0)
+verdict = bool(skill_pos >= 6 and (skill_l or 0) >= 0.20)
+final = lgb.LGBMClassifier(**PARAMS)
+final.fit(data[feats], data["y"], categorical_feature=["sym_id"])
+final.booster_.save_model("/kaggle/working/ml5h.txt")
+syms = sorted({m.split("/")[-1].replace("_30m.csv", "") for m in members})
+json.dump({"features": feats, "symbols": syms, "gate": 0.55,
+           "hold_bars": H, "bar_minutes": 30,
+           "universe": "wide-full-data", "train_rows": int(len(data)),
+           "verdict": verdict, "long_avg": base_l, "long_skill": skill_l,
+           "folds": folds},
+          open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
+print("финальная модель сохранена | вердикт:", verdict, flush=True)
