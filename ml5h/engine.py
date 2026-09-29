@@ -235,6 +235,9 @@ class Ml5hEngine:
             if p > self.c.gate:
                 await self.open_long(sym, p)
                 slots += 1
+            elif p < 1 - self.c.gate:
+                await self.open_short(sym, p)
+                slots += 1
             else:
                 log.info("сигнал %s p=%.3f — мимо порога", sym, p)
 
@@ -296,12 +299,86 @@ class Ml5hEngine:
             info = await asyncio.to_thread(self.ex.query_order_full, sym, oid)
             px = float((info or {}).get("avgPrice") or 0)
             self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
-                             "p": p, "maker_entry": False}
+                             "p": p, "maker_entry": False, "side": "LONG"}
             tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {qty} @ {px} (taker) p={p:.2f}")
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": bb, "p": p,
-                             "ts": time.time()}
+                             "ts": time.time(), "side": "LONG"}
         log.info("%s: GTX-вход выставлен @%s qty=%s p=%.3f", sym, bb, qty, p)
+
+    async def open_short(self, sym: str, p: float) -> None:
+        """Зеркало open_long: SELL post-only по аску, taker-фолбэк."""
+        top = await asyncio.to_thread(self.ex.order_book_top, sym)
+        if not top:
+            return
+        _bb, ba = top
+        qty = self.qty_for(sym, Decimal(str(ba)))
+        if qty <= 0:
+            log.warning("%s: лот не сошёлся — символ исключён", sym)
+            if sym in self.symbols:
+                self.symbols.remove(sym)
+            return
+        try:
+            oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
+                                          "SELL", Decimal(str(ba)), qty,
+                                          f"ml5-{sym}-{int(time.time())}",
+                                          post_only=True)
+        except BinanceError as e:
+            if api_code(e) in (-4411, -1121):
+                log.warning("%s: биржа требует соглашения TradFi — символ "
+                            "исключён", sym)
+                if sym in self.symbols:
+                    self.symbols.remove(sym)
+                return
+            raise
+        if oid is None:
+            oid = await asyncio.to_thread(self.ex.place_market, sym, "SELL",
+                                          qty)
+            if oid is None:
+                return
+            info = await asyncio.to_thread(self.ex.query_order_full, sym, oid)
+            px = float((info or {}).get("avgPrice") or 0)
+            self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
+                             "p": p, "maker_entry": False, "side": "SHORT"}
+            tg.fire(f"🔴 <b>ML5 ВХОД {sym}</b> {qty} @ {px} (taker) p={p:.2f}")
+            return
+        self.pending[sym] = {"oid": oid, "qty": qty, "px": ba, "p": p,
+                             "ts": time.time(), "side": "SHORT"}
+        log.info("%s: GTX-шорт выставлен @%s qty=%s p=%.3f", sym, ba, qty, p)
+
+    async def close_short(self, sym: str, pos: dict, maker: bool) -> None:
+        """Зеркало close_long: BUY лимиткой по биду, фолбэк маркет BUY."""
+        top = await asyncio.to_thread(self.ex.order_book_top, sym)
+        if maker and top:
+            bb, _ba = top
+            try:
+                oid = await asyncio.to_thread(
+                    self.ex.place_tp_limit, sym, "BUY", Decimal(str(bb)),
+                    pos["qty"], f"ml5x-{sym}-{int(time.time())}",
+                    pos_side="SHORT" if self.ex.hedge_mode else None)
+            except BinanceError as e:
+                if api_code(e) == -2022:
+                    log.warning("%s: -2022 при выходе — позиция уже закрыта, "
+                                "снимаю с учёта", sym)
+                    self.pos.pop(sym, None)
+                    return
+                raise
+            if oid is not None:
+                pos["exit_oid"] = oid
+                pos["exit_deadline"] = time.time() + self.c.exit_ttl_s
+                return
+        oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
+                                      pos["qty"])
+        info = await asyncio.to_thread(self.ex.query_order_full, sym,
+                                       oid) if oid else None
+        exit_px = float((info or {}).get("avgPrice") or 0)
+        await self.finish(sym, pos, exit_px, "taker")
+
+    async def close_any(self, sym: str, pos: dict, maker: bool) -> None:
+        if pos.get("side") == "SHORT":
+            await self.close_short(sym, pos, maker)
+        else:
+            await self.close_long(sym, pos, maker)
 
     async def close_long(self, sym: str, pos: dict, maker: bool) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
@@ -342,7 +419,8 @@ class Ml5hEngine:
                 log.warning("%s: цена выхода не от биржи — мид %s", sym,
                             exit_px)
         q = Decimal(str(pos["qty"]))
-        pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q
+        mult = Decimal(1) if pos.get("side", "LONG") == "LONG" else Decimal(-1)
+        pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
         self.day_pnl += pnl
         self.pos.pop(sym, None)
         tg.fire(f"{'✅' if pnl > 0 else '🔻'} <b>ML5 ВЫХОД {sym}</b> "
@@ -369,7 +447,8 @@ class Ml5hEngine:
             log.warning("%s: позиция без состояния (%s) — усыновляю и "
                         "закрываю", sym, d.get("entryPrice"))
             self.pos[sym] = {"qty": qty, "px": float(d.get("entryPrice", 0)),
-                             "entry_ts": 0, "adopted": True}
+                             "entry_ts": 0, "adopted": True,
+                             "side": "LONG" if amt > 0 else "SHORT"}
         for sym in list(self.pos):
             if sym not in live:
                 pos = self.pos[sym]
@@ -404,7 +483,7 @@ class Ml5hEngine:
                                      "maker_entry": True, "partial": True}
                     tg.fire(f"🟡 <b>ML5 {sym}</b> частичный вход {exq} @ {px} "
                             f"— веду остаток")
-                    await self.close_long(sym, self.pos[sym], maker=True)
+                    await self.close_any(sym, self.pos[sym], maker=True)
                 else:
                     self._fallback_market(sym, pend)
                 continue
@@ -414,7 +493,8 @@ class Ml5hEngine:
                 px = float((info or {}).get("avgPrice") or pend["px"])
                 self.pending.pop(sym, None)
                 self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
-                                 "maker_entry": True}
+                                 "maker_entry": True,
+                                 "side": pend.get("side", "LONG")}
                 tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {pend['qty']} @ {px} "
                         f"(мейкер) p={pend['p']:.2f}")
         for sym, pos in list(self.pos.items()):
@@ -423,16 +503,19 @@ class Ml5hEngine:
             # Закрываем по рынку, поверх остаётся биржевая ликвидация.
             top = await asyncio.to_thread(self.ex.order_book_top, sym)
             if top:
-                bid, _ba = top
-                loss = (Decimal(str(pos["px"])) - Decimal(str(bid))) \
-                    / Decimal(str(pos["px"]))
+                bid, ba = top
+                px0 = Decimal(str(pos["px"]))
+                if pos.get("side") == "SHORT":
+                    loss = (Decimal(str(ba)) - px0) / px0
+                else:
+                    loss = (px0 - Decimal(str(bid))) / px0
                 if loss >= self.c.emergency_stop_pct:
                     log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%% (порог %s%%)",
                                 sym, float(loss) * 100,
                                 self.c.emergency_stop_pct * 100)
                     tg.fire(f"🛑 <b>ML5 АВАРИЙНЫЙ ВЫХОД {sym}</b> "
                             f"−{float(loss)*100:.1f}%")
-                    await self.close_long(sym, pos, maker=False)
+                    await self.close_any(sym, pos, maker=False)
                     continue
             if "exit_oid" in pos:
                 if time.time() > pos["exit_deadline"]:
@@ -445,7 +528,7 @@ class Ml5hEngine:
                                           float((info or {}).get("avgPrice")
                                                 or 0), "maker")
                     else:
-                        await self.close_long(sym, pos, maker=False)
+                        await self.close_any(sym, pos, maker=False)
                 else:
                     info = await asyncio.to_thread(self.ex.query_order_full,
                                                    sym, pos["exit_oid"])
@@ -457,7 +540,7 @@ class Ml5hEngine:
             horizon = pos["entry_ts"] + self.c.hold_bars \
                 * self.c.bar_minutes * 60 - 60
             if time.time() >= horizon:
-                await self.close_long(sym, pos, maker=True)
+                await self.close_any(sym, pos, maker=True)
 
     async def _fallback_market(self, sym: str, pend: dict) -> None:
         oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
