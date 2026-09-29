@@ -51,8 +51,38 @@ print(f"дней {len(days)}: {days[0]}..{days[-1]}, строк {len(ds)}", flus
 
 report = {"days": str(len(days)), "ok": False}
 if len(days) < MIN_TEST_DAYS + 1:
-    report["reason"] = f"мало дней ({len(days)}) — нужно >= {MIN_TEST_DAYS+1}"
-    json.dump(report, open("/kaggle/working/lob_report.json", "w"))
+    # ПИЛОТ (диагностика по просьбе владельца 30.09, НЕ для деплоя):
+    # обучаем на первых днях, проверяем на последнем — есть ли навык хоть
+    # на малых данных. ok всегда False: пилот модель не устанавливает.
+    pilot = []
+    test_days = days[1:]
+    for day in test_days:
+        tr, te = ds[ds["day"] < day], ds[ds["day"] == day]
+        if len(te) < 5000 or len(tr) < 20000:
+            continue
+        m = lgb.LGBMClassifier(n_estimators=150, learning_rate=0.05, max_depth=4,
+                               subsample=0.8, colsample_bytree=0.8,
+                               random_state=SEED, n_jobs=4, verbosity=-1)
+        m.fit(tr[FEATS], tr["y"])
+        p = m.predict_proba(te[FEATS])[:, 1]
+        fwd = te["mid_fut"] / te["mid"] - 1
+        qs = np.quantile(p, [0.2, 0.4, 0.6, 0.8])
+        rows_q = []
+        for lo, hi in zip([None] + list(qs), list(qs) + [None]):
+            mask = ((p >= lo) if lo is not None else True) & \
+                   ((p < hi) if hi is not None else True)
+            if mask.sum() > 100:
+                rows_q.append(round(float(fwd[mask].mean() * 10000), 2))
+        spread = round(rows_q[-1] - rows_q[0], 2)
+        acc = round(((p > 0.5) == (te["y"] == 1)).mean() * 100, 2)
+        pilot.append({"day": str(day), "acc": acc, "quintile_bp": rows_q,
+                      "skill_bp": spread})
+        print(f"пилот {day}: acc {acc:.1f}% | квинтили (бп) {rows_q} | "
+              f"навык {spread:+.1f} бп", flush=True)
+    report["pilot"] = pilot
+    report["ok"] = False
+    json.dump(report, open("/kaggle/working/lob_report.json", "w"), indent=1)
+    print("пилот завершён (модель НЕ сохраняется — не для деплоя)", flush=True)
 else:
     test_days = days[-MIN_TEST_DAYS:]
     rows = []
