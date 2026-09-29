@@ -107,9 +107,10 @@ def _main() -> None:
                        f"на сервере ({r.get('plus_days')}/{r.get('n_test')} "
                        "плюс-дней)")
                 else:
-                    tg(f"🧠⚠️ Стакан: кернел прошёл, но критерии не взяты "
-                       f"({r.get('reason') or r.get('plus_days')} "
-                       f"из {r.get('n_test')}) — работаем на старой модели")
+                    reason = r.get("reason") or (
+                        "плюс-дней %s из %s" % (r.get("plus_days"), r.get("n_test")))
+                    tg("🧠⚠️ Стакан: критерии не взяты (" + reason +
+                       ") — работаем на старой модели")
     # ---------- 3. Wide ML5H: панель готова? -> пуш wide ----------
     if not (FLAGS / "panel_done").exists():
         st = kernel_status("usdc-panel-downloader")
