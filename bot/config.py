@@ -126,6 +126,16 @@ class Config(BaseModel):
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
             dry_run=os.environ.get("BOT_DRY_RUN", "0") == "1",
         )
+        # денежный сайзинг (малый профиль): риск и дневной кап в деньгах,
+        # гибрид с процентным потолком
+        ml5h_risk = os.environ.get("ML5H_RISK_USDC", "")
+        cfg.ml5h.risk_usdc = Decimal(ml5h_risk) if ml5h_risk else Decimal("0")
+        ml5h_day = os.environ.get("ML5H_DAY_CAP_USDC", "")
+        cfg.ml5h.day_cap_usdc = Decimal(ml5h_day) if ml5h_day else Decimal("0")
+        lob_risk = os.environ.get("LOB_RISK_USDC", "")
+        cfg.lob.risk_usdc = Decimal(lob_risk) if lob_risk else Decimal("0")
+        lob_day = os.environ.get("LOB_DAY_CAP_USDC", "")
+        cfg.lob.day_cap_usdc = Decimal(lob_day) if lob_day else Decimal("0")
         cfg.ml5h.enabled = os.environ.get("ML5H_ENABLED", "1") == "1"
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"
         if os.environ.get("ML5H_SYMBOLS"):
