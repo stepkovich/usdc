@@ -295,17 +295,9 @@ class Ml5hEngine:
                 return
             raise
         if oid is None:
-            # GTX отклонён (цена ушла сквозь) — сигнал «купить сейчас»:
-            # исполняемся маркетом, как договорено механикой сигнала
-            oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
-                                          qty)
-            if oid is None:
-                return
-            info = await asyncio.to_thread(self.ex.query_order_full, sym, oid)
-            px = float((info or {}).get("avgPrice") or 0)
-            self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
-                             "p": p, "maker_entry": False, "side": "LONG"}
-            tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {qty} @ {px} (taker) p={p:.2f}")
+            # цена ушла сквозь уровень: экзамен считал мейкерский вход —
+            # пропускаем сигнал (погоня тейкером = вход хуже обещанного)
+            log.info("%s: цена ушла от уровня — сигнал пропущен", sym)
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": bb, "p": p,
                              "ts": time.time(), "side": "LONG"}
@@ -493,8 +485,11 @@ class Ml5hEngine:
                             f"— веду остаток")
                     await self.close_any(sym, self.pos[sym], maker=True)
                 else:
-                    self._fallback_market(sym, pend)
-                continue
+                    # цена не дошла до уровня за отведённое время: экзамен
+                    # считал мейкерский вход по уровню — погоню тейкером
+                    # не делаем, сигнал пропускаем
+                    log.info("%s: вход не исполнен за TTL — сигнал пропущен",
+                             sym)
             info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                            pend["oid"])
             if (info or {}).get("status") == "FILLED":
@@ -550,14 +545,3 @@ class Ml5hEngine:
             if time.time() >= horizon:
                 await self.close_any(sym, pos, maker=True)
 
-    async def _fallback_market(self, sym: str, pend: dict) -> None:
-        oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
-                                      pend["qty"])
-        info = await asyncio.to_thread(self.ex.query_order_full, sym,
-                                       oid) if oid else None
-        px = float((info or {}).get("avgPrice") or 0)
-        if px > 0:
-            self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
-                             "maker_entry": False}
-            tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {pend['qty']} @ {px} "
-                    f"(taker) p={pend['p']:.2f}")

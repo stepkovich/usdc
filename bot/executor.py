@@ -165,11 +165,11 @@ class Executor:
                 quantity=self._plain(qty), price=self._plain(price),
                 new_client_order_id=client_id)
         except BinanceError as e:
-            if post_only and api_code(e) == -4131:
-                # would immediately cross: цена уже прошла наш уровень —
-                # вход тейкером не делаем (сигнал устарел)
-                log.info("%s: GTX-вход отклонён (-4131 would cross) — цена уже "
-                         "за уровнем, пропускаем", symbol)
+            if post_only and api_code(e) in (-4131, -5022):
+                # не мейкер (цена ушла сквозь уровень): демо отвечает -5022,
+                # прод -4131. Вход тейкером не делаем — сигнал устарел.
+                log.info("%s: GTX-вход отклонён (%s) — цена ушла, пропускаем",
+                         symbol, api_code(e))
                 return None
             raise
         oid = int(r.data().order_id)
