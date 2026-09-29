@@ -52,7 +52,8 @@ for i, name in enumerate(members, 1):
                      usecols=["open_time", "high", "low", "close",
                               "volume", "quote_volume", "taker_buy_base"])
     for c in df.columns:
-        df[c] = df[c].astype("float32")
+        if c != "open_time":          # 13-значные метки не влезают в float32!
+            df[c] = df[c].astype("float32")
     df["open_time"] = df["open_time"].astype(np.int64)
     df.index = pd.to_datetime(df["open_time"], unit="ms")
     close = df["close"]

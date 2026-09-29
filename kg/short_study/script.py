@@ -46,7 +46,8 @@ for i, name in enumerate(members, 1):
                      usecols=["open_time", "high", "low", "close",
                               "volume", "quote_volume", "taker_buy_base"])
     for c in df.columns:
-        df[c] = df[c].astype("float32")
+        if c != "open_time":          # 13-значные метки не влезают в float32!
+            df[c] = df[c].astype("float32")
     df["open_time"] = df["open_time"].astype(np.int64)
     df.index = pd.to_datetime(df["open_time"], unit="ms")
     close = df["close"]
@@ -123,7 +124,14 @@ for i, name in enumerate(members, 1):
     X["close"] = close.values
     X["ot"] = df["open_time"].values
     X = X.replace([np.inf, -np.inf], np.nan)
-    parts.append(X.dropna(subset=[c for c in X.columns if c not in ("fwd", "close")]))
+    kept = X.dropna(subset=[c for c in X.columns if c not in ("fwd", "close")])
+    if i <= 3:
+        nans = X.isna().sum()
+        bad = nans[nans > 0].sort_values(ascending=False)
+        print(f"ДИАГНОСТИКА {sym}: было {len(X)}, осталось {len(kept)} "
+              f"({len(kept)/max(1,len(X))*100:.1f}%), NaN по колонкам: "
+              f"{dict(bad.head(6))}", flush=True)
+    parts.append(kept)
     if i % 100 == 0:
         print(f"признаки {i}/{len(members)}", flush=True)
 data = pd.concat(parts, ignore_index=True)
