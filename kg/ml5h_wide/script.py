@@ -305,4 +305,9 @@ json.dump({"features": feats, "symbols": syms, "gate": 0.55,
            "verdict": verdict, "long_avg": base_l, "long_skill": skill_l,
            "folds": folds},
           open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
+# вердикт ОБЯЗАТЕЛЬНО и в report.json — его читает синхронизатор на сервере
+json.dump({"verdict": verdict, "avg": base_l, "skill": skill_l,
+           "skill_pos_quarters": skill_pos,
+           "folds": folds},
+          open("/kaggle/working/report.json", "w"), indent=1)
 print("финальная модель сохранена | вердикт:", verdict, flush=True)
