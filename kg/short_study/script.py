@@ -102,6 +102,7 @@ for i, name in enumerate(members, 1):
             X[c] = np.float32(0)
     X["high"] = df["high"].values.astype("float32")
     X["low"] = df["low"].values.astype("float32")
+    X["fi"] = np.uint16(i)
     X["sym_id"] = sym_id(sym)
     # реализованная сделка: вход close×(1+slip), стоп -15%, выход close[t+10]
     lows = df["low"].values.astype("float32")
@@ -128,7 +129,7 @@ for i, name in enumerate(members, 1):
 data = pd.concat(parts, ignore_index=True)
 del parts
 print("строк:", len(data), flush=True)
-feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot", "low", "high")]
+feats = [c for c in data.columns if c not in ("y", "fwd", "close", "ot", "low", "high", "fi")]
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="Q")
 data["quarter"] = q.astype(str)
 quarters = sorted(data["quarter"].unique())
@@ -137,6 +138,11 @@ quarters = sorted(data["quarter"].unique())
 import numpy as _np
 idx = _np.linspace(0, len(quarters) - 1, 8).round().astype(int)
 test_q = [quarters[i] for i in idx]
+nan_counts = data.isna().sum()
+print("NaN по колонкам (только ненулевые):", flush=True)
+for c in data.columns:
+    if nan_counts[c] > 0:
+        print(f"  {c}: {nan_counts[c]}", flush=True)
 print("тестовые кварталы:", test_q, flush=True)
 all_trades, folds, nulls = [], [], []
 for k, qq in enumerate(test_q):
