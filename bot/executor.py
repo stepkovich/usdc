@@ -60,6 +60,14 @@ class Executor:
                 api_key=cfg.api_key, api_secret=cfg.api_secret,
                 base_path=cfg.exec_rest_url,
                 timeout=5000, retries=3, backoff=1000))
+        # РЫНОЧНЫЕ данные — всегда мейннет (публичные): свечи и стакан
+        # для признаков/решений должны совпадать с обучением на реале.
+        # Исполнение (ордера/позиции/баланс) — по режиму (демо).
+        self.market_client = DerivativesTradingUsdsFutures(
+            config_rest_api=ConfigurationRestAPI(
+                api_key=cfg.api_key, api_secret=cfg.api_secret,
+                base_path="https://fapi.binance.com",
+                timeout=5000, retries=3, backoff=1000))
 
     def _run(self, fn, *a, **kw):
         return asyncio.to_thread(fn, *a, **kw)
@@ -298,7 +306,7 @@ class Executor:
 
     def order_book_top(self, symbol: str) -> tuple[float, float] | None:
         try:
-            r = self.client.rest_api.order_book(symbol=symbol, limit=5).data()
+            r = self.market_client.rest_api.order_book(symbol=symbol, limit=5).data()
             d = r.model_dump(by_alias=True) if hasattr(r, "model_dump") else {}
             return float(d["bids"][0][0]), float(d["asks"][0][0])
         except Exception as e:
@@ -311,7 +319,7 @@ class Executor:
         if end_ms:
             kw["end_time"] = end_ms
         try:
-            resp = self.client.rest_api.kline_candlestick_data(**kw)
+            resp = self.market_client.rest_api.kline_candlestick_data(**kw)
             rows = getattr(resp.data(), "root", None) or resp.data()
             return list(rows)
         except Exception as e:

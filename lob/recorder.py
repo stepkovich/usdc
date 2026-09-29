@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 import time
 from collections import deque
@@ -181,7 +182,10 @@ class Archive:
                 old = pd.read_parquet(out)
                 new = pd.concat([old, new]).drop_duplicates(
                     ["ts", "symbol"]).sort_values("ts")
-            new.to_parquet(out, compression="zstd", index=False)
+            # атомарная запись: битых полузаписанных файлов больше не будет
+            tmp = out.with_suffix(".tmp")
+            new.to_parquet(tmp, compression="zstd", index=False)
+            os.replace(tmp, out)
             del self.buf[key]
 
     def prune(self) -> None:
