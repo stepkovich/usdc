@@ -443,7 +443,8 @@ class Ml5hEngine:
         for sym, d in live.items():
             if sym in self.pos or sym in self.pending:
                 continue
-            qty = abs(Decimal(str(d.get("positionAmt", "0"))))
+            amt = Decimal(str(d.get("positionAmt", "0")))
+            qty = abs(amt)
             log.warning("%s: позиция без состояния (%s) — усыновляю и "
                         "закрываю", sym, d.get("entryPrice"))
             self.pos[sym] = {"qty": qty, "px": float(d.get("entryPrice", 0)),
