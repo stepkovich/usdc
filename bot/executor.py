@@ -141,6 +141,13 @@ class Executor:
             log.warning("margin_type %s: %s", symbol, e)
 
     # ---------- ордера ----------
+    @staticmethod
+    def _plain(v) -> str:
+        """Обычная десятичная запись: 9.8e-06 -> '0.0000098'. Биржа
+        отвергает «научную запись» в параметрах (-1102 malformed)."""
+        d = v if isinstance(v, Decimal) else Decimal(str(v))
+        return format(d, "f")
+
     def place_entry_limit(self, symbol: str, side: str, price: Decimal,
                           qty: Decimal, client_id: str,
                           post_only: bool = False) -> int | None:
@@ -155,7 +162,7 @@ class Executor:
                 type=NewOrderTypeEnum["LIMIT"].value,
                 position_side=self._pside(side),
                 time_in_force=NewOrderTimeInForceEnum[tif].value,
-                quantity=float(qty), price=float(price),
+                quantity=self._plain(qty), price=self._plain(price),
                 new_client_order_id=client_id)
         except BinanceError as e:
             if post_only and api_code(e) == -4131:
@@ -184,7 +191,7 @@ class Executor:
                     side=NewOrderSideEnum[side].value,
                     type=NewOrderTypeEnum["LIMIT"].value,
                     time_in_force=NewOrderTimeInForceEnum["GTC"].value,
-                    quantity=float(qty), price=float(price),
+                    quantity=self._plain(qty), price=self._plain(price),
                     new_client_order_id=client_id if attempt == 0 else f"{client_id}r{attempt}")
                 if self.hedge_mode:
                     # pos_side = сторона ПОЗИЦИИ, обязательна. Фолбэк на сторону
@@ -264,7 +271,7 @@ class Executor:
             try:
                 kw = dict(symbol=symbol, side=NewOrderSideEnum[side].value,
                           type=NewOrderTypeEnum["MARKET"].value,
-                          quantity=float(qty))
+                          quantity=self._plain(qty))
                 if self.hedge_mode:
                     kw["position_side"] = pos_side or self._pside(side)
                 r = self.client.rest_api.new_order(**kw)
