@@ -546,6 +546,10 @@ class LobBot:
                             if self.lob.day_cap_usdc > 0
                             else self.balance * Decimal("0.005"))
                 if self.day_pnl <= -day_cap:
+                    # кап: отменяем висящие входные заявки
+                    for psym, pend in list(self.pending.items()):
+                        self.cancel(psym, pend["oid"])
+                        self.pending.pop(psym, None)
                     await asyncio.sleep(2)
                     continue
                 for sym in self.SYMS:

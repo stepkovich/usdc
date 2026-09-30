@@ -52,6 +52,17 @@ class Ml5hEngine:
         self.day_pnl = Decimal(0)
         self.day_key = datetime.now(timezone.utc).date()
         self.balance = Decimal(0)
+        # ЖУРНАЛ СДЕЛОК: источник для сигнала переобучения (последние 30
+        # сделок) и живой статистики. Биржа — источник правды по факту,
+        # журнал — наш слой с уверенностью модели в момент входа.
+        self.trade_db = self.cfg.data_dir / "ml5h_trades.db"
+        self.trade_db.parent.mkdir(parents=True, exist_ok=True)
+        self.tconn = sqlite3.connect(self.trade_db, timeout=30)
+        self.tconn.execute("""CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY, ts REAL, symbol TEXT, side TEXT,
+            entry_px REAL, exit_px REAL, qty REAL, pnl REAL,
+            confidence REAL, exit_kind TEXT)""")
+        self.tconn.commit()
         self._last_bar_ms = 0
 
     # ---------- запуск ----------
@@ -176,6 +187,13 @@ class Ml5hEngine:
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
         if self.day_pnl <= -day_cap:
+            # кап: отменяем ещё висящие входные заявки (иначе лазейка —
+            # заявка, поставленная до капа, исполняется после него)
+            for psym, pend in list(self.pending.items()):
+                await asyncio.to_thread(self.ex.cancel_order, psym,
+                                        pend["oid"])
+                self.pending.pop(psym, None)
+                log.info("%s: входная заявка отменена (дневной кап)", psym)
             await self.manage()
             return
         await self.manage()
@@ -462,6 +480,34 @@ class Ml5hEngine:
         mult = Decimal(1) if pos.get("side", "LONG") == "LONG" else Decimal(-1)
         pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
         self.day_pnl += pnl
+        try:
+            self.tconn.execute(
+                "INSERT INTO trades (ts,symbol,side,entry_px,exit_px,qty,"
+                "pnl,confidence,exit_kind) VALUES (?,?,?,?,?,?,?,?,?)",
+                (time.time(), sym, pos.get("side", "LONG"), float(pos["px"]),
+                 float(exit_px), float(pos["qty"]), float(pnl),
+                 float(pos.get("p", 0) or 0), exit_fee))
+            self.tconn.commit()
+        except Exception:
+            log.exception("журнал сделок: запись не удалась")
+        # СИГНАЛ ПЕРЕОБУЧЕНИЯ (SYSTEM_RULES): последние 30 живых сделок
+        # суммарно в минусе -> флаг переобучения (подхватит конвейер Кегла)
+        try:
+            n = self.tconn.execute("select count(*) from trades").fetchone()[0]
+            if n >= 30:
+                avg = self.tconn.execute(
+                    "select avg(pnl) from (select pnl from trades "
+                    "order by id desc limit 30)").fetchone()[0]
+                if avg is not None and avg < 0:
+                    flag = self.cfg.data_dir / "signals" / "retrain_needed"
+                    flag.parent.mkdir(parents=True, exist_ok=True)
+                    if not flag.exists():
+                        flag.write_text(datetime.now(timezone.utc).isoformat())
+                        tg.fire(f"🧠 Сигнал: последние 30 сделок в минусе "
+                                f"(средняя {avg:+.2f} USDT) — запрошено "
+                                f"переобучение")
+        except Exception:
+            log.exception("сигнал переобучения")
         self.pos.pop(sym, None)
         tg.fire(f"{'✅' if pnl > 0 else '🔻'} <b>ML5 ВЫХОД {sym}</b> "
                 f"{pnl:.2f} USDT ({exit_fee})")

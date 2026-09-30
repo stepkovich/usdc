@@ -72,6 +72,31 @@ def _main() -> None:
         if len(stale) > len(parquets) * 0.5:
             tg("⚠️ Стакан: данные на сервере устарели (большинство файлов "
                "старше 36ч) — локальная машина долго выключена?")
+    # ---------- 1б. АНАЛИТИК: месячная и сигнальная цепочка переобучения.
+    # Правило (SYSTEM_RULES): планово раз в месяц + внепланово, если
+    # последние 30 живых сделок в минусе (флаг от движка).
+    retrain_flag = USDC / "data" / "signals" / "retrain_needed"
+    now_dt = datetime.now(timezone.utc)
+    mflag = FLAGS / f"monthly_retrain_{now_dt:%Y-%m}"
+    want_monthly = now_dt.day <= 7 and not mflag.exists()
+    want_signal = retrain_flag.exists()
+    if (want_monthly or want_signal) and (FLAGS / "panel_done").exists():
+        # 1) обновляем панель (кернел-загрузчик добавит свежие месяцы)
+        kg_dl = Path("/root/kg/panel_downloader")
+        if kg_dl.exists():
+            out = kaggle("kernels", "push", "-p", str(kg_dl), timeout=120)
+            print("push panel downloader:", out.strip()[:100], flush=True)
+        # 2) перезапускаем широкую цепочку: сбрасываем флаги завершения
+        (FLAGS / "wide_pushed").unlink(missing_ok=True)
+        (FLAGS / "wide_done").unlink(missing_ok=True)
+        mflag.touch()
+        want_signal = False
+        reason = "план (месяц)" if now_dt.day <= 7 else "сигнал просадки"
+        tg(f"🧠 Переобучение аналитика запущено ({reason}): панель "
+           f"обновляется, экзамен решит")
+    if retrain_flag.exists():
+        retrain_flag.unlink(missing_ok=True)
+
     # ---------- 2. LOB: кернел обучения (только если данных >= полдня) ----------
     kg_lob = Path("/root/kg/lob_trainer")
     if kg_lob.exists() and len(parquets) >= 12:
