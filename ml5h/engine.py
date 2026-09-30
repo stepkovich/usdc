@@ -242,12 +242,11 @@ class Ml5hEngine:
             self.bars[sym] = pd.concat([df, new])[-1200:]
         btc = self.bars.get("BTCUSDT")
         self.btc_close = btc["close"] if btc is not None else None
-        slots = len(self.pos) + len(self.pending)
+        # 1) оценка ВСЕХ доступных символов бара (только закрытые бары в df)
+        scored = []
         for sym in self.symbols:
             if sym not in self.bars or sym in self.pos or sym in self.pending:
                 continue
-            if slots >= self.c.max_slots:
-                break
             try:
                 x = await asyncio.to_thread(feature_row, self.bars[sym],
                                             self.btc_close, sym, self.feats)
@@ -259,17 +258,29 @@ class Ml5hEngine:
                 log.warning("%s: ошибка оценки (%s) — символ исключён",
                             sym, str(e)[:60])
                 continue
+            if p > self.c.gate or p < 1 - self.c.gate:
+                scored.append((abs(p - 0.5), p, sym))
+        # 2) сортировка по уверенности (расстояние от 50%): самые уверенные
+        #    входят первыми. Раньше при нехватке мест входили первые ПО
+        #    АЛФАВИТУ — уверенность игнорировалась (дыра найдена владельцем).
+        scored.sort(key=lambda t: t[0], reverse=True)
+        if scored:
+            log.info("бар: кандидатов %d, лучшая уверенность %.3f (%s)",
+                     len(scored), scored[0][1], scored[0][2])
+        slots = len(self.pos) + len(self.pending)
+        for conf, p, sym in scored:
+            if slots >= self.c.max_slots:
+                log.info("очередь: %s p=%.3f — слотов нет, ждёт следующего бара",
+                         sym, p)
+                continue
             try:
                 if p > self.c.gate:
                     await self.open_long(sym, p)
                     slots += 1
-                elif p < 1 - self.c.gate:
+                else:
                     await self.open_short(sym, p)
                     slots += 1
-                else:
-                    log.info("сигнал %s p=%.3f — мимо порога", sym, p)
             except BinanceError as e:
-                from bot.executor import api_code
                 log.warning("%s: биржа отказала (%s) — сигнал пропущен",
                             sym, str(e)[:80])
                 continue
