@@ -206,31 +206,49 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
     last_sql = time.time()
     last_arch = time.time()
     last_pulse = 0
+    last_vacuum_day = None
     while True:
         await asyncio.sleep(0.2)
-        now = int(time.time() * 1000)
-        if now - last_row >= ROW_MS:
-            last_row = now
-            for s, st in STATES.items():
-                row = compute_row(st, now)
-                if row:
-                    buf.append((now, s) + row[1:])
-        if time.time() - last_sql >= 5:
-            last_sql = time.time()
-            if buf:
-                conn_sql.executemany(
-                    f"INSERT OR REPLACE INTO feat ({FEATURE_ROW}) "
-                    f"VALUES ({','.join('?' * NCOLS)})", buf)
-                hot_cut = now - HOT_HOURS * 3600_000
-                conn_sql.execute("delete from feat where ts < ?", (hot_cut,))
-                conn_sql.commit()
-        if time.time() - last_arch >= 60:
-            last_arch = time.time()
-            if buf:
-                arch.add(buf)
-                buf = []
-            arch.flush()
-            arch.prune()
+        try:
+            now = int(time.time() * 1000)
+            if now - last_row >= ROW_MS:
+                last_row = now
+                for s, st in STATES.items():
+                    row = compute_row(st, now)
+                    if row:
+                        buf.append((now, s) + row[1:])
+            if time.time() - last_sql >= 5:
+                last_sql = time.time()
+                if buf:
+                    conn_sql.executemany(
+                        f"INSERT OR REPLACE INTO feat ({FEATURE_ROW}) "
+                        f"VALUES ({','.join('?' * NCOLS)})", buf)
+                    hot_cut = now - HOT_HOURS * 3600_000
+                    conn_sql.execute("delete from feat where ts < ?",
+                                     (hot_cut,))
+                    conn_sql.commit()
+            if time.time() - last_arch >= 60:
+                last_arch = time.time()
+                if buf:
+                    arch.add(buf)
+                    buf = []
+                arch.flush()
+                arch.prune()
+            # сборка мусора ВНУТРИ писателя (та же связь — не спорит
+            # сама с собой). Внешний VACUUM убил рекордер 30.09.
+            now_dt = datetime.now(timezone.utc)
+            if (now_dt.hour == 4 and now_dt.minute >= 5
+                    and last_vacuum_day != now_dt.date()):
+                last_vacuum_day = now_dt.date()
+                try:
+                    conn_sql.execute("VACUUM")
+                    log.info("VACUUM выполнен (внутри писателя)")
+                except Exception as e:
+                    log.warning("VACUUM отложен: %s", e)
+        except sqlite3.OperationalError as e:
+            log.warning("SQL занят (%s) — повторю через цикл", str(e)[:60])
+        except Exception:
+            log.exception("writer_task")
         if now - last_pulse >= 60_000:
             last_pulse = now
             rate = sum(st.msg_n for st in STATES.values())
@@ -242,9 +260,10 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
 
 async def run(universe: list[str]) -> None:
     DB.parent.mkdir(parents=True, exist_ok=True)
-    conn_sql = sqlite3.connect(DB)
+    conn_sql = sqlite3.connect(DB, timeout=60)
     conn_sql.executescript(SCHEMA)
     conn_sql.execute("PRAGMA journal_mode=WAL")
+    conn_sql.execute("PRAGMA busy_timeout=60000")
     global UNIVERSE
     UNIVERSE = list(universe)
     for s in UNIVERSE:

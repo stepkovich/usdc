@@ -64,25 +64,14 @@ def _main() -> None:
     FLAGS.mkdir(parents=True, exist_ok=True)
     # ---------- 1. LOB: данные -> Кегл ----------
     parquets = sorted(glob.glob(str(LOB_ARCHIVE / "*.parquet")))
-    # битые (недописанные) файлы ломают датасет — сносим до загрузки
-    for p in list(parquets):
-        if os.path.getsize(p) < 1024:
-            os.remove(p)
-            parquets.remove(p)
-            print("удалён битый паркет:", os.path.basename(p), flush=True)
-    if len(parquets) >= 12:            # хотя бы полдня данных
-        meta = {"title": "USDC LOB features",
-                "id": "sewerted/usdc-lob-features",
-                "licenses": [{"name": "CC0-1.0"}]}
-        (LOB_ARCHIVE / "dataset-metadata.json").write_text(json.dumps(meta))
-        # БЕЗ --dir-mode zip: кернел ищет *.parquet файлы, zip их прячет
-        out = kaggle("datasets", "create", "-p", str(LOB_ARCHIVE),
-                     timeout=1800)
-        if "successfully" not in out.lower():
-            out2 = kaggle("datasets", "version", "-p", str(LOB_ARCHIVE),
-                          "-m", "daily sync", timeout=1800)
-            out = out2 if "successfully" in out2.lower() else out
-        print("dataset:", out.strip()[:120], flush=True)
+    # Датасет на Кегле обновляет ЛОКАЛЬНАЯ машина (у неё полная история —
+    # VPS-диск не вмещает 4 дня). Здесь только проверка свежести.
+    if parquets:
+        fresh_cut = time.time() - 36 * 3600
+        stale = [p for p in parquets if os.path.getmtime(p) < fresh_cut]
+        if len(stale) > len(parquets) * 0.5:
+            tg("⚠️ Стакан: данные на сервере устарели (большинство файлов "
+               "старше 36ч) — локальная машина долго выключена?")
     # ---------- 2. LOB: кернел обучения (только если данных >= полдня) ----------
     kg_lob = Path("/root/kg/lob_trainer")
     if kg_lob.exists() and len(parquets) >= 12:
