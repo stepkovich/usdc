@@ -426,11 +426,12 @@ class LobBot:
         mult = Decimal(1) if pos["pside"] == "LONG" else Decimal(-1)
         pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
         self.day_pnl += pnl
+        # Decimal не привязывается к sqlite напрямую — все числа в float
         self.conn.execute(
             "insert into trades values (?,?,?,?,?,?,?,?,?,?,?)",
             (sym, pos["pside"], int(pos["entry_ts"] * 1000),
-             int(time.time() * 1000), pos["px"], exit_px, pos["qty"],
-             float(pnl), "maker", exit_fee,
+             int(time.time() * 1000), float(pos["px"]), float(exit_px),
+             float(pos["qty"]), float(pnl), "maker", exit_fee,
              "adopted" if pos.get("adopted") else ""))
         self.conn.commit()
         self.pos.pop(sym, None)
