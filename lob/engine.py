@@ -335,6 +335,14 @@ class LobBot:
         mrel = (micro / mid - 1) * 10000 if mid else None
         x = dict(zip(FEATS, [sp, mrel, i5, i10, i20, f10b, f10s,
                              f60b, f60s, ntr, vpin, d30, d120]))
+        # паритет с тренером: потоки делятся на медианы из артефакта модели
+        meds = getattr(self, "medians", {}).get(sym)
+        if meds:
+            for c in ("flow10_buy", "flow10_sell", "flow60_buy",
+                      "flow60_sell", "ntr10"):
+                m = meds.get(c)
+                if m:
+                    x[c] = x[c] / m
         if any(v is None or (isinstance(v, float) and np.isnan(v))
                for v in x.values()):
             return None
@@ -353,7 +361,18 @@ class LobBot:
             self._model_mtime = mt
             self.try_load_model()
 
+    def _load_medians(self) -> None:
+        """Медианы из артефакта модели: живой движок делит сырые значения
+        потока на ТЕ ЖЕ медианы, что и тренер (паритет признаков)."""
+        self.medians = {}
+        p = ROOT / "data" / "lob" / "medians.json"
+        if p.exists():
+            import json as _json
+            self.medians = _json.load(open(p))
+            log.info("медианы загружены: %d символов", len(self.medians))
+
     def try_load_model(self) -> None:
+        self._load_medians()
         if self.model is None and MODEL.exists():
             try:
                 import lightgbm as lgb

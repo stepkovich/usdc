@@ -4,6 +4,7 @@
 Правило честности: >= 4 дней данных, >= 3 тестовых дней, порог деплоя
 записан в отчёт — решение принимает серверная обвязка по цифрам."""
 import glob, json, os
+import json as _json
 import numpy as np, pandas as pd, lightgbm as lgb
 
 HORIZON_S = 300
@@ -26,6 +27,7 @@ df = pd.concat(frames, ignore_index=True).drop_duplicates(["ts", "symbol"]) \
 print(f"строк {len(df)}, символов {df['symbol'].nunique()}", flush=True)
 
 parts = []
+medians = {}
 for sym, g in df.groupby("symbol"):
     g = g.sort_values("ts").reset_index(drop=True)
     ts, mid = g["ts"].values, g["mid"].values
@@ -40,9 +42,13 @@ for sym, g in df.groupby("symbol"):
                         mid[j], np.nan)
         g[name] = mid / past - 1
     g["microprice_rel"] = (g["microprice"] / g["mid"] - 1) * 10000
+    sym_meds = {}
     for c in ("flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell", "ntr10"):
         med = g[c].median()
-        g[c] = g[c] / (med if med and med > 0 else 1.0)
+        med = float(med) if med and med > 0 else 1.0
+        sym_meds[c] = med
+        g[c] = g[c] / med
+    medians[sym] = sym_meds
     parts.append(g)
 ds = pd.concat(parts, ignore_index=True).dropna(subset=FEATS + ["y"])
 ds["day"] = pd.to_datetime(ds["ts"], unit="ms").dt.date
@@ -110,6 +116,9 @@ else:
                            random_state=SEED, n_jobs=4, verbosity=-1)
     m.fit(ds[FEATS], ds["y"])
     m.booster_.save_model("/kaggle/working/lob.txt")
+    _json.dump(medians, open("/kaggle/working/lob_medians.json", "w"), indent=1)
+    print("медианы сохранены (файл ляжет рядом с моделью — живой движок "
+          "делит сырые значения на них)", flush=True)
     report["rows"] = int(len(ds))
     json.dump(report, open("/kaggle/working/lob_report.json", "w"), indent=1)
     print("модель сохранена; ок дней:", ok_days, "/", len(rows), flush=True)
