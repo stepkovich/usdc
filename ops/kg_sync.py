@@ -8,6 +8,7 @@
      пушен — пушит wide-кернел; на вердикте по критериям деплоит модель.
 """
 import json, subprocess, sys, time, glob, os
+from datetime import datetime, timezone
 from pathlib import Path
 
 TOKEN = Path("/root/.kaggle/token").read_text().strip()
