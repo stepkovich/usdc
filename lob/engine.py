@@ -77,6 +77,8 @@ class LobBot:
         self.cfg = cfg
         self.lob = cfg.lob
         self.ex = ex
+        self.GATE = self.lob.gate          # порог уверенности (0.62)
+        self.HOLD_S = self.lob.hold_s      # холд, секунд
         self.client = ex.client
         self.SYMS = list(self.lob.symbols)
         self.hedge = True
