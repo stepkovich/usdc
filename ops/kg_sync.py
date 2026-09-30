@@ -75,8 +75,13 @@ def _main() -> None:
     # ---------- 2. LOB: кернел обучения (только если данных >= полдня) ----------
     kg_lob = Path("/root/kg/lob_trainer")
     if kg_lob.exists() and len(parquets) >= 12:
-        out = kaggle("kernels", "push", "-p", str(kg_lob), timeout=120)
-        print("push lob:", out.strip()[:120], flush=True)
+        lob_gate = FLAGS / "lob_last_push"
+        can_push = (not lob_gate.exists()
+                    or time.time() - lob_gate.stat().st_mtime >= 6 * 3600)
+        if can_push:
+            out = kaggle("kernels", "push", "-p", str(kg_lob), timeout=120)
+            lob_gate.write_text(str(time.time()))
+            print("push lob:", out.strip()[:120], flush=True)
         for _ in range(60):            # до 2 часов
             time.sleep(120)
             st = kernel_status("usdc-lob-train")
