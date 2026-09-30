@@ -84,9 +84,7 @@ for i, name in enumerate(members, 1):
         X["btc_ret_10"] = bret.rolling(10).sum().astype("float32") * 0 + b.pct_change(10).astype("float32")
         X["btc_ret_20"] = b.pct_change(20).astype("float32")
         X["btc_corr"] = rets.rolling(50, min_periods=20).corr(bret).astype("float32")
-    h4 = close.resample("4h").last().dropna()
-    X["h4_momentum"] = h4.pct_change(6).reindex(df.index, method="ffill") \
-        .astype("float32")
+    X["h4_momentum"] = close.pct_change(48).astype("float32")
     tsdt = df.index
     X["hour"] = tsdt.hour.astype("float32")
     X["dow"] = tsdt.dayofweek.astype("float32")

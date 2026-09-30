@@ -49,8 +49,10 @@ def make_features(df: pd.DataFrame, btc_close, symbol: str) -> pd.DataFrame:
         out["btc_ret_10"] = btc.pct_change(10)
         out["btc_ret_20"] = btc.pct_change(20)
         out["btc_corr"] = close.rolling(50, min_periods=20).corr(btc)
-    h4 = close.resample("4h").last().dropna()
-    out["h4_momentum"] = h4.pct_change(6).reindex(df.index, method="ffill")
+    # 24ч импульс прямо на 30м барах: 48 баров x 30мин = 24ч — тот же
+    # смысл, что 6 x 4h, но БЕЗ утечки будущего (старый resample-вариант
+    # давал бару 08:00 цену 11:30 — корзина накрывала 4 часа вперёд).
+    out["h4_momentum"] = close.pct_change(48)
     ts = pd.to_datetime(df["open_time"], unit="ms")
     out["hour"] = ts.dt.hour.values
     out["dow"] = ts.dt.dayofweek.values
