@@ -19,7 +19,8 @@ rsync -az --quiet /home/iek/lob_archive/feat_*.parquet "$STAGE/" 2>/dev/null || 
 find "$STAGE" -name "*.parquet" -size -1k -delete 2>/dev/null
 # Пуш накопленной истории на Кегл (обучение спринтера читает датасет отсюда)
 if [ -s "$STAGE/dataset-metadata.json" ] && ls "$STAGE"/*.parquet > /dev/null 2>&1; then
-  export KAGGLE_API_TOKEN=$(cat /home/iek/.kaggle/token 2>/dev/null)
+  # токен лежит в JSON-обёртке — извлекаем чистое значение
+  KAGGLE_API_TOKEN=$(sed -n 's/.*"kaggle_token":"\([^"]*\)".*/\1/p' /home/iek/.kaggle/token 2>/dev/null)
   cd "$STAGE" && python3 -m kaggle datasets version -p . -m "hourly" >> /home/iek/lob_archive/kaggle_push.log 2>&1 || \
   /home/iek/PycharmProjects/USDC/ops/tg_notify.sh "⚠️ Не удалось обновить датасет стакана на Кегле"
 fi
