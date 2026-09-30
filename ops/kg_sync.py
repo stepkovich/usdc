@@ -159,21 +159,27 @@ def _main() -> None:
         if st in ("complete", "error"):
             out = kaggle("kernels", "output", "sewerted/usdc-ml5h-wide",
                          "-p", "/root/kg/wide_out", timeout=1200)
-            rep = Path("/root/kg/wide_out/report.json")
-            if rep.exists():
-                r = json.loads(rep.read_text())
-                if r.get("verdict") and Path("/root/kg/wide_out/ml5h.txt").exists():
-                    import shutil
-                    shutil.copy("/root/kg/wide_out/ml5h.txt",
-                                USDC / "data" / "models" / "ml5h.txt")
-                    shutil.copy("/root/kg/wide_out/ml5h_meta.json",
-                                USDC / "data" / "models" / "ml5h_meta.json")
-                    (FLAGS / "wide_done").touch()
-                    tg("🧠✅ ШИРОКАЯ МОДЕЛЬ ПРИНЯТА по критериям и на сервере")
-                else:
-                    (FLAGS / "wide_done").touch()
-                    tg("🧠⚠️ Широкая модель НЕ прошла критерии — осталась "
-                       "текущая; детали в отчёте Кегла")
+            # вердикт: ИЗ META (пишется всегда при успехе обучения);
+            # report.json — дубликат, в старых версиях без поля
+            verdict = None
+            meta_p = Path("/root/kg/wide_out/ml5h_meta.json")
+            if meta_p.exists():
+                verdict = json.load(open(meta_p)).get("verdict")
+            else:
+                rep_p = Path("/root/kg/wide_out/report.json")
+                if rep_p.exists():
+                    verdict = json.load(open(rep_p)).get("verdict")
+            model_p = Path("/root/kg/wide_out/ml5h.txt")
+            if verdict and model_p.exists():
+                import shutil
+                shutil.copy(model_p, USDC / "data" / "models" / "ml5h.txt")
+                shutil.copy(meta_p, USDC / "data" / "models" / "ml5h_meta.json")
+                (FLAGS / "wide_done").touch()
+                tg("🧠✅ ШИРОКАЯ МОДЕЛЬ ПРИНЯТА по критериям и на сервере")
+            else:
+                (FLAGS / "wide_done").touch()
+                tg("🧠⚠️ Широкая модель НЕ прошла критерии — осталась "
+                   "текущая; детали в отчёте Кегла")
 
 if __name__ == "__main__":
     main()
