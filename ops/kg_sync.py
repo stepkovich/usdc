@@ -46,6 +46,71 @@ def kernel_status(slug: str) -> str:
             return raw.split(".")[-1].strip().strip('"').lower()
     return out.strip()[:80]
 
+def disk_guard(threshold: float = 85.0) -> None:
+    """Дисковый сторож: если занято > threshold% — чистим ТОЛЬКО то,
+    что заведомо не нужно (старые выводы кернелов, кеши, dangling
+    образы, WAL-хвост). НИКОГДА не трогаем: код, .git, базы сделок,
+    модели, архив паркетов, lob_out (последний отчёт)."""
+    st = os.statvfs("/")
+    used_pct = 100.0 * (1 - st.f_bfree / st.f_blocks)
+    if used_pct < threshold:
+        return
+    freed = 0
+    def _du(path: str) -> int:
+        if not os.path.exists(path):
+            return 0
+        s = subprocess.run(["du", "-sm", path], capture_output=True,
+                           text=True)
+        try:
+            return int(s.stdout.split()[0])
+        except Exception:
+            return 0
+    # 1) старые выводы wide-ядра: wide_out — текущий (не трогаем),
+    #    wide_out2 и прочие дубли — безопасно
+    for junk in ("/root/kg/wide_out2", "/root/kg/pd_check"):
+        sz = _du(junk)
+        if sz:
+            subprocess.run(["rm", "-rf", junk])
+            freed += sz
+    # 2) кеш пипа
+    sz = _du("/root/.cache/pip")
+    if sz:
+        subprocess.run(["rm", "-rf", "/root/.cache/pip"])
+        freed += sz
+    # 3) dangling docker-образы
+    try:
+        r = subprocess.run(["docker", "image", "prune", "-af"],
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines():
+                if "reclaimed" in line.lower():
+                    val = "".join(c for c in line if c.isdigit() or c == ".")
+                    if val:
+                        freed += int(float(val.split(".")[0]))
+    except Exception:
+        pass
+    # 4) WAL-хвост стакана (безопасно: чекпойнт тот же файл, busy-ожидание)
+    db = USDC / "data" / "lob" / "lob.db"
+    if db.exists():
+        try:
+            import sqlite3
+            con = sqlite3.connect(str(db), timeout=5)
+            con.execute("PRAGMA busy_timeout=5000")
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            con.close()
+        except Exception as e:
+            print(f"checkpoint lob.db не удался (не страшно): {e}",
+                  flush=True)
+    if freed > 20:
+        st2 = os.statvfs("/")
+        now_pct = 100.0 * (1 - st2.f_bfree / st2.f_blocks)
+        tg(f"🧹 Дисковый сторож: было {used_pct:.0f}%, стало {now_pct:.0f}% "
+           f"(освобождено ~{freed} МБ)")
+    st3 = os.statvfs("/")
+    if 100.0 * (1 - st3.f_bfree / st3.f_blocks) > 93:
+        tg(f"⚠️ Диск {100.0 * (1 - st3.f_bfree / st3.f_blocks):.0f}% после "
+           f"чистки — нужен ручной разбор")
+
 def main() -> None:
     # защита от наложения запусков (часовой cron, кернел ждёт до 2ч)
     lock = Path("/root/kg/kg_sync.lock")
@@ -63,6 +128,7 @@ def main() -> None:
 
 def _main() -> None:
     FLAGS.mkdir(parents=True, exist_ok=True)
+    disk_guard()
     # ---------- 1. LOB: данные -> Кегл ----------
     parquets = sorted(glob.glob(str(LOB_ARCHIVE / "*.parquet")))
     # Датасет на Кегле обновляет ЛОКАЛЬНАЯ машина (у неё полная история —
@@ -98,9 +164,14 @@ def _main() -> None:
     if retrain_flag.exists():
         retrain_flag.unlink(missing_ok=True)
 
-    # ---------- 2. LOB: кернел обучения (только если данных >= полдня) ----------
+    # ---------- 2. LOB: кернел обучения ----------
+    # Гейт данных: полную историю в датасет Кегла заливает ЛОКАЛЬНАЯ
+    # машина (у сервера архив урезан до часов по месту), поэтому сервер
+    # проверяет лишь живость потока (2+ свежих файла), а не объём.
     kg_lob = Path("/root/kg/lob_trainer")
-    if kg_lob.exists() and len(parquets) >= 12:
+    fresh_q = [p for p in parquets
+               if time.time() - os.path.getmtime(p) < 3 * 3600]
+    if kg_lob.exists() and len(fresh_q) >= 2:
         lob_gate = FLAGS / "lob_last_push"
         can_push = (not lob_gate.exists()
                     or time.time() - lob_gate.stat().st_mtime >= 6 * 3600)

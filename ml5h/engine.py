@@ -468,18 +468,23 @@ class Ml5hEngine:
         await self.finish(sym, pos, exit_px, "taker")
 
     async def finish(self, sym: str, pos: dict, exit_px: float,
-                     exit_fee: str, allow_zero: bool = False) -> None:
-        if exit_px <= 0:
-            if allow_zero:
-                exit_px = 0.0
-            else:
+                     exit_fee: str, exchange_pnl=None) -> None:
+        """Биржа — источник правды: нулевая цена выхода запрещена. Если
+        цена не восстановима (закрытие вне бота), в журнал и дневной счёт
+        идёт реализованный PnL с биржи."""
+        if exit_px <= 0 and exchange_pnl is not None:
+            pnl = Decimal(str(exchange_pnl))
+            exit_fee = "external_birzha"
+        else:
+            if exit_px <= 0:
                 top = await asyncio.to_thread(self.ex.order_book_top, sym)
                 exit_px = (top[0] + top[1]) / 2 if top else pos["px"]
                 log.warning("%s: цена выхода не от биржи — мид %s", sym,
                             exit_px)
-        q = Decimal(str(pos["qty"]))
-        mult = Decimal(1) if pos.get("side", "LONG") == "LONG" else Decimal(-1)
-        pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
+            q = Decimal(str(pos["qty"]))
+            mult = Decimal(1) if pos.get("side", "LONG") == "LONG" \
+                else Decimal(-1)
+            pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
         self.day_pnl += pnl
         try:
             self.tconn.execute(
@@ -540,8 +545,22 @@ class Ml5hEngine:
         for sym in list(self.pos):
             if sym not in live:
                 pos = self.pos[sym]
-                log.warning("%s: закрыта вне бота — фиксирую", sym)
-                await self.finish(sym, pos, 0.0, "external", allow_zero=True)
+                log.warning("%s: закрыта вне бота — результат беру с биржи",
+                            sym)
+                info = (await asyncio.to_thread(self.ex.query_order_full,
+                        sym, pos["exit_oid"])) if pos.get("exit_oid") \
+                    else None
+                if (info or {}).get("status") == "FILLED":
+                    await self.finish(sym, pos,
+                                      float((info or {}).get("avgPrice")
+                                            or 0), "maker")
+                else:
+                    since_ms = int(max(pos.get("entry_ts", 0),
+                                       time.time() - 6 * 3600) * 1000)
+                    pnl_ex = await asyncio.to_thread(
+                        self.ex.realized_pnl_since, sym, since_ms)
+                    await self.finish(sym, pos, 0.0, "external",
+                                      exchange_pnl=pnl_ex)
 
     async def manage(self) -> None:
         for sym, pend in list(self.pending.items()):

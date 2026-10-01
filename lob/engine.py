@@ -215,10 +215,22 @@ class LobBot:
                 if sym not in live and sym not in self.pending:
                     pos_d = self.pos.get(sym)
                     if pos_d:
-                        log.warning("%s: позиция закрыта ВНЕ бота — "
-                                    "фиксирую с нулевой ценой выхода", sym)
-                        self.finish(sym, pos_d, 0.0, "external",
-                                    allow_zero=True)
+                        log.warning("%s: позиция закрыта вне бота — "
+                                    "результат беру с биржи", sym)
+                        info = (self.order_info(sym, pos_d["exit_oid"])
+                                if pos_d.get("exit_oid") else None)
+                        if (info or {}).get("status") == "FILLED":
+                            self.finish(sym, pos_d,
+                                        float(info.get("avgPrice") or 0),
+                                        "maker")
+                        else:
+                            since_ms = int(max(pos_d.get("entry_ts", 0.0),
+                                               time.time() - 6 * 3600)
+                                          * 1000)
+                            pnl_ex = self.ex.realized_pnl_since(sym,
+                                                                since_ms)
+                            self.finish(sym, pos_d, 0.0, "external",
+                                        exchange_pnl=pnl_ex)
                 elif sym in self.pending and sym not in live:
                     self.cancel(sym, self.pending[sym]["oid"])
                     self.pending.pop(sym, None)
@@ -432,18 +444,22 @@ class LobBot:
         self.finish(sym, pos, exit_px, "taker_fb")
 
     def finish(self, sym: str, pos: dict, exit_px: float, exit_fee: str,
-               allow_zero: bool = False) -> None:
-        if exit_px <= 0:
-            if allow_zero:
-                exit_px = 0.0
-            else:
+               exchange_pnl: Decimal | None = None) -> None:
+        """Биржа — источник правды: нулевая цена выхода запрещена.
+        Если цена не восстановима (закрытие вне бота), в журнал и дневной
+        счёт идёт реализованный PnL, полученный с биржи."""
+        if exit_px <= 0 and exchange_pnl is not None:
+            pnl = exchange_pnl
+            exit_fee = "external_birzha"
+        else:
+            if exit_px <= 0:
                 top = self.book_top(sym)
                 exit_px = (top[0] + top[1]) / 2 if top else pos["px"]
                 log.warning("%s: цена выхода не от биржи — взят мид %s",
                             sym, exit_px)
-        q = Decimal(str(pos["qty"]))
-        mult = Decimal(1) if pos["pside"] == "LONG" else Decimal(-1)
-        pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
+            q = Decimal(str(pos["qty"]))
+            mult = Decimal(1) if pos["pside"] == "LONG" else Decimal(-1)
+            pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
         self.day_pnl += pnl
         # Decimal не привязывается к sqlite напрямую — все числа в float
         self.conn.execute(

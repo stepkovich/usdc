@@ -1,0 +1,13 @@
+{
+  "id": "sewerted/usdc-ml5h-funding",
+  "title": "usdc-ml5h-funding",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "false",
+  "dataset_sources": ["sewerted/usdc-funding"],
+  "competition_sources": [],
+  "kernel_sources": ["sewerted/usdc-panel-downloader"]
+}

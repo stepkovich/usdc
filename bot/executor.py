@@ -329,6 +329,36 @@ class Executor:
                 out.append(d)
         return out
 
+    def realized_pnl_since(self, symbol: str, since_ms: int) -> Decimal | None:
+        """Биржа — источник правды: реализованный PnL + комиссии по символу
+        с момента since_ms. None — если биржа не ответила (не фантазируем)."""
+        try:
+            r = self.client.rest_api.get_income_history(
+                symbol=symbol, income_type="REALIZED_PNL",
+                start_time=since_ms, limit=1000).data()
+            rows = getattr(r, "root", None) or r
+            total = Decimal("0")
+            for e in rows:
+                d = e.model_dump(by_alias=True) \
+                    if hasattr(e, "model_dump") else e
+                total += Decimal(str(d.get("income", "0")))
+            try:
+                r2 = self.client.rest_api.get_income_history(
+                    symbol=symbol, income_type="COMMISSION",
+                    start_time=since_ms, limit=1000).data()
+                rows2 = getattr(r2, "root", None) or r2
+                for e in rows2:
+                    d = e.model_dump(by_alias=True) \
+                        if hasattr(e, "model_dump") else e
+                    total += Decimal(str(d.get("income", "0")))
+            except Exception as e:
+                log.warning("%s: комиссии из истории не получены: %s",
+                            symbol, e)
+            return total
+        except Exception as e:
+            log.warning("%s: реализованный PnL не получен: %s", symbol, e)
+            return None
+
     def order_book_top(self, symbol: str) -> tuple[float, float] | None:
         try:
             r = self.market_client.rest_api.order_book(symbol=symbol, limit=5).data()
