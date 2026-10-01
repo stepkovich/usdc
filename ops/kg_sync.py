@@ -194,6 +194,17 @@ def _main() -> None:
                 if r.get("ok") and Path("/root/kg/lob_out/lob.txt").exists():
                     import shutil
                     shutil.copy("/root/kg/lob_out/lob.txt", LOB_MODEL)
+                    # медианы (паритет нормализации) и список признаков
+                    # модели едят вместе с ней — без них движок кормит
+                    # сырые потоки, а модель ждёт делёные (ловили 01.10)
+                    med_p = Path("/root/kg/lob_out/lob_medians.json")
+                    if med_p.exists():
+                        shutil.copy(med_p, USDC / "data" / "lob" /
+                                    "medians.json")
+                    for extra in ("lob_feats.json",):
+                        ep = Path("/root/kg/lob_out") / extra
+                        if ep.exists():
+                            shutil.copy(ep, USDC / "data" / "lob" / extra)
                     tg("🧠✅ Стакан: модель переобучена на Кегле и УЖЕ "
                        f"на сервере ({r.get('plus_days')}/{r.get('n_test')} "
                        "плюс-дней)")

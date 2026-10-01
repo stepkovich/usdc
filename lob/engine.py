@@ -59,6 +59,7 @@ RETRAIN_AT = (0, 15)              # 00:15 UTC
 FEATS = ["spread_bp", "microprice_rel", "imb5", "imb10", "imb20",
          "flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell",
          "ntr10", "vpin10", "d30", "d120"]
+LADDER_FEATS = ["imb1", "slope_b", "slope_a", "wall_b", "wall_a"]
 
 
 def api_code(e):
@@ -74,6 +75,7 @@ def api_code(e):
 
 class LobBot:
     def __init__(self, cfg, ex):
+        self.feats = list(FEATS)
         self.cfg = cfg
         self.lob = cfg.lob
         self.ex = ex
@@ -321,13 +323,14 @@ class LobBot:
     def feat_row(self, sym: str):
         cur = self.conn.execute(
             "select ts,mid,spread_bp,microprice,imb5,imb10,imb20,flow10_buy,"
-            "flow10_sell,flow60_buy,flow60_sell,ntr10,vpin10 from feat "
+            "flow10_sell,flow60_buy,flow60_sell,ntr10,vpin10,"
+            "imb1,slope_b,slope_a,wall_b,wall_a from feat "
             "where symbol=? order by ts desc limit 1", (sym,))
         row = cur.fetchone()
         if not row:
             return None
         (ts, mid, sp, micro, i5, i10, i20, f10b, f10s, f60b, f60s,
-         ntr, vpin) = row
+         ntr, vpin, i1, sl_b, sl_a, w_b, w_a) = row
         h = self.hist.setdefault(sym, [])
         if not h or h[-1][0] != ts:
             h.append((ts, mid))
@@ -345,8 +348,13 @@ class LobBot:
         d30 = mid / m30 - 1 if m30 else None
         d120 = mid / m120 - 1 if m120 else None
         mrel = (micro / mid - 1) * 10000 if mid else None
-        x = dict(zip(FEATS, [sp, mrel, i5, i10, i20, f10b, f10s,
-                             f60b, f60s, ntr, vpin, d30, d120]))
+        # x строится по ВСЕМ известным признакам; в модель идут только
+        # self.feats (список из артефакта: у старых моделей их 13, у
+        # лестничных — 18), лишние/пустые не мешают
+        x = dict(zip(FEATS + LADDER_FEATS,
+                     [sp, mrel, i5, i10, i20, f10b, f10s,
+                      f60b, f60s, ntr, vpin, d30, d120,
+                      i1, sl_b, sl_a, w_b, w_a]))
         # паритет с тренером: потоки делятся на медианы из артефакта модели
         meds = getattr(self, "medians", {}).get(sym)
         if meds:
@@ -355,8 +363,8 @@ class LobBot:
                 m = meds.get(c)
                 if m:
                     x[c] = x[c] / m
-        if any(v is None or (isinstance(v, float) and np.isnan(v))
-               for v in x.values()):
+        if any(x[f] is None or (isinstance(x[f], float)
+                                and np.isnan(x[f])) for f in self.feats):
             return None
         return x, mid, ts
 
@@ -385,6 +393,16 @@ class LobBot:
 
     def try_load_model(self) -> None:
         self._load_medians()
+        # список признаков модели лежит рядом с ней: у моделей v1 — 13
+        # признаков, у лестничных — 18; без файла считаем по-старому
+        self.feats = list(FEATS)
+        pf = ROOT / "data" / "lob" / "lob_feats.json"
+        if pf.exists():
+            try:
+                import json as _json2
+                self.feats = _json2.load(open(pf))
+            except Exception as e:
+                log.warning("lob_feats.json не читается (%s) — дефолт", e)
         if self.model is None and MODEL.exists():
             try:
                 import lightgbm as lgb
@@ -392,7 +410,8 @@ class LobBot:
                 import bot.telegram as tg
                 tg.fire("🧠 <b>Стакан</b>: модель получена — начинаю "
                         "оценивать очереди")
-                log.info("модель загружена из файла")
+                log.info("модель загружена из файла (%d признаков)",
+                         len(self.feats))
             except Exception as e:
                 log.warning("модель не загрузилась: %s", e)
 
@@ -552,7 +571,7 @@ class LobBot:
             if not fr:
                 continue
             x, mid, _ts = fr
-            p = float(self.model.predict(np.array([[x[f] for f in FEATS]]))[0])
+            p = float(self.model.predict(np.array([[x[f] for f in self.feats]]))[0])
             acted = ""
             if p >= GATE:
                 self.open_position(sym, "BUY", p, mid, x["spread_bp"])
@@ -609,7 +628,7 @@ class LobBot:
                         continue
                     x, mid, _ts = fr
                     p = float(self.model.predict(
-                        np.array([[x[f] for f in FEATS]]))[0])
+                        np.array([[x[f] for f in self.feats]]))[0])
                     acted = ""
                     if p >= self.GATE:
                         self.open_position(sym, "BUY", p, mid, x["spread_bp"])

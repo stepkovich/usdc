@@ -56,12 +56,40 @@ CREATE TABLE IF NOT EXISTS feat (
     bid_sum20 REAL, ask_sum20 REAL,
     flow10_buy REAL, flow10_sell REAL, flow60_buy REAL, flow60_sell REAL,
     ntr10 INTEGER, vpin10 REAL,
+    imb1 REAL, slope_b REAL, slope_a REAL, wall_b REAL, wall_a REAL,
     PRIMARY KEY (ts, symbol));
 """
 FEATURE_ROW = ("ts,symbol,mid,spread_bp,microprice,imb5,imb10,imb20,"
                "bid_sum20,ask_sum20,flow10_buy,flow10_sell,flow60_buy,"
-               "flow60_sell,ntr10,vpin10")
-NCOLS = 16
+               "flow60_sell,ntr10,vpin10,"
+               "imb1,slope_b,slope_a,wall_b,wall_a")
+NCOLS = 21
+# Признаки лестницы (v2, 01.10): imb1 — перекос лучшего уровня;
+# slope_b/a — где объём: глубина (уровни 6-20) против верха (1-5);
+# wall_b/a — крупнейший уровень против среднего по 20 (стена).
+RAW_DEPTH_ROW = (["bid_p_%d" % i for i in range(1, 21)]
+                 + ["bid_q_%d" % i for i in range(1, 21)]
+                 + ["ask_p_%d" % i for i in range(1, 21)]
+                 + ["ask_q_%d" % i for i in range(1, 21)])
+PARQUET_ROW = (FEATURE_ROW + "," + ",".join(RAW_DEPTH_ROW)).split(",")
+SQL_N = len(FEATURE_ROW.split(","))          # первые 21 колонка буфера
+
+
+def _ladder_feats(bids, asks, bq, aq):
+    """Все новые признаки — безразмерные (отношения объёмов)."""
+    tot1 = bq + aq
+    imb1 = (bq - aq) / tot1 if tot1 > 0 else 0.0
+    btop = sum(q for _, q in bids[:5])
+    atop = sum(q for _, q in asks[:5])
+    bdeep = sum(q for _, q in bids[5:20])
+    adeep = sum(q for _, q in asks[5:20])
+    slope_b = bdeep / btop if btop > 0 else 0.0
+    slope_a = adeep / atop if atop > 0 else 0.0
+    bq20 = [q for _, q in bids[:20]]
+    aq20 = [q for _, q in asks[:20]]
+    wall_b = (max(bq20) / (sum(bq20) / 20)) if bq20 and sum(bq20) > 0 else 0.0
+    wall_a = (max(aq20) / (sum(aq20) / 20)) if aq20 and sum(aq20) > 0 else 0.0
+    return imb1, slope_b, slope_a, wall_b, wall_a
 
 
 class SymState:
@@ -156,8 +184,22 @@ def compute_row(st: SymState, now_ms: int) -> tuple | None:
             f60s += q
     tot10 = f10b + f10s
     vpin = abs(f10b - f10s) / tot10 if tot10 > 0 else 0.0
-    return (now_ms, mid, spread_bp, micro, imb5, imb10, imb20,
-            bs20, as20, f10b, f10s, f60b, f60s, ntr, vpin)
+    l1, sl_b, sl_a, w_b, w_a = _ladder_feats(bids, asks, bq, aq)
+    base = (now_ms, mid, spread_bp, micro, imb5, imb10, imb20,
+            bs20, as20, f10b, f10s, f60b, f60s, ntr, vpin,
+            l1, sl_b, sl_a, w_b, w_a)
+    # сырые 20 уровней в архив (пересчитать любой новый признак потом
+    # можно без ожидания новых дней); в SQLite сырьё не пишем — база
+    # маленькая, ей нужна только горячая скорость
+    def pad(levels):
+        p = [0.0] * 20
+        q = [0.0] * 20
+        for i, (pr, qt) in enumerate(levels[:20]):
+            p[i], q[i] = pr, qt
+        return p, q
+    bp, bq20_ = pad(bids)
+    ap, aq20_ = pad(asks)
+    return base + tuple(bp + bq20_ + ap + aq20_)
 
 
 class Archive:
@@ -177,9 +219,11 @@ class Archive:
             if not rows:
                 continue
             out = PARQUET_DIR / f"feat_{key}.parquet"
-            new = pd.DataFrame(rows, columns=FEATURE_ROW.split(","))
+            new = pd.DataFrame(rows, columns=PARQUET_ROW)
             if out.exists():
                 old = pd.read_parquet(out)
+                # старые строки часа без сырых уровней останутся с NaN —
+                # норма: сырьё пишется только с версии depth20
                 new = pd.concat([old, new]).drop_duplicates(
                     ["ts", "symbol"]).sort_values("ts")
             # атомарная запись: битых полузаписанных файлов больше не будет
@@ -220,9 +264,12 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
             if time.time() - last_sql >= 5:
                 last_sql = time.time()
                 if buf:
+                    # в горячую базу — только 21 признак (движок),
+                    # сырьё уровней живёт только в архиве-паркете
                     conn_sql.executemany(
                         f"INSERT OR REPLACE INTO feat ({FEATURE_ROW}) "
-                        f"VALUES ({','.join('?' * NCOLS)})", buf)
+                        f"VALUES ({','.join('?' * SQL_N)})",
+                        [r[:SQL_N] for r in buf])
                     hot_cut = now - HOT_HOURS * 3600_000
                     conn_sql.execute("delete from feat where ts < ?",
                                      (hot_cut,))
@@ -262,6 +309,15 @@ async def run(universe: list[str]) -> None:
     DB.parent.mkdir(parents=True, exist_ok=True)
     conn_sql = sqlite3.connect(DB, timeout=60)
     conn_sql.executescript(SCHEMA)
+    # миграция старой базы (16 колонок): добавляем 5 лестничных; если
+    # уже есть — не трогаем
+    for col in ("imb1", "slope_b", "slope_a", "wall_b", "wall_a"):
+        try:
+            conn_sql.execute(f"ALTER TABLE feat ADD COLUMN {col} REAL")
+        except sqlite3.OperationalError as e:
+            if "duplicate" not in str(e).lower():
+                log.warning("миграция %s: %s", col, e)
+    conn_sql.commit()
     conn_sql.execute("PRAGMA journal_mode=WAL")
     conn_sql.execute("PRAGMA busy_timeout=60000")
     global UNIVERSE
