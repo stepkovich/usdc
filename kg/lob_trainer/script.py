@@ -58,15 +58,13 @@ frames = []
 for f in files:
     try:
         try:                                    # новый формат (21 колонка)
-            df_f = pd.read_parquet(f, columns=BASE_COLS,
-                                   dtype={c: "float32"
-                                          for c in FLOAT_COLS})
+            df_f = pd.read_parquet(f, columns=BASE_COLS)
         except Exception:                       # старый (16) — лестницы нет
-            df_f = pd.read_parquet(f, columns=BASE_COLS[:16],
-                                   dtype={c: "float32"
-                                          for c in FLOAT_COLS[:14]})
+            df_f = pd.read_parquet(f, columns=BASE_COLS[:16])
             for c in LADDER_FEATS:
                 df_f[c] = np.float32(np.nan)
+        # read_parquet не умеет dtype= — приводим после чтения
+        df_f[FLOAT_COLS] = df_f[FLOAT_COLS].astype("float32")
         frames.append(df_f)
     except Exception:
         print("битый файл пропущен:", f, flush=True)
@@ -136,8 +134,8 @@ def walk_forward(data, feats, test_days):
         q75, q25 = np.quantile(p, 0.75), np.quantile(p, 0.25)
         spread = (fwd[p >= q75].mean() - fwd[p <= q25].mean()) * 10000
         acc = ((p > 0.5) == (te["y"] == 1)).mean() * 100
-        rows.append({"day": str(day), "acc": round(acc, 2),
-                     "spread_bp": round(spread, 2)})
+        rows.append({"day": str(day), "acc": round(float(acc), 2),
+                     "spread_bp": round(float(spread), 2)})
         print(f"  {day}: acc {acc:.1f}%, спред {spread:+.1f} бп", flush=True)
     return rows
 

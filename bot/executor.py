@@ -124,7 +124,7 @@ class Executor:
             except BinanceError as e:
                 code = api_code(e)
                 log.error("плечо %s -> %sx не установлено (код %s): %s",
-                          s, self.cfg.leverage, code, e)
+                          s, lev, code, e)
                 if s in current:
                     self.leverage_set[s] = current[s]
             except Exception as e:
