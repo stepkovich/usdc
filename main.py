@@ -59,11 +59,13 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
 async def main() -> None:
     log_path = Path(os.environ.get("BOT_LOG_PATH", ROOT / "data" / "bot.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    from logging.handlers import RotatingFileHandler
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         handlers=[logging.StreamHandler(),
-                  logging.FileHandler(log_path)])
+                  RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024,
+                                      backupCount=2)])
     cfg = Config.from_env(ROOT)
     (cfg.data_dir / "lob" / "archive").mkdir(parents=True, exist_ok=True)
     if cfg.telegram_token and cfg.telegram_chat_id:

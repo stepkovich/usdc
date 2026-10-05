@@ -561,8 +561,9 @@ class LobBot:
             return
         for sym in self.SYMS:
             self.manage(sym)
-        self.try_load_model()
         if self.model is None:
+            self.try_load_model()      # только пока модели нет: без этого
+        if self.model is None:         # условия json перечитывался каждый тик
             return
         slots = len(self.pos) + len(self.pending)
         if slots >= MAX_SLOTS:
@@ -614,7 +615,8 @@ class LobBot:
                     continue
                 for sym in self.SYMS:
                     self.manage(sym)
-                self.try_load_model()
+                if self.model is None:
+                    self.try_load_model()
                 if self.model is None:
                     await asyncio.sleep(2)
                     continue

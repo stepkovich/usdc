@@ -288,8 +288,15 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
                     and last_vacuum_day != now_dt.date()):
                 last_vacuum_day = now_dt.date()
                 try:
+                    # сигналы старше 7 дней не нужны (журнал сделок —
+                    # отдельная таблица, не трогаем)
+                    cut = int((time.time() - 7 * 86400) * 1000)
+                    n = conn_sql.execute(
+                        "delete from signals where ts < ?", (cut,)).rowcount
                     conn_sql.execute("VACUUM")
-                    log.info("VACUUM выполнен (внутри писателя)")
+                    conn_sql.commit()
+                    log.info("уборка: удалено %d старых сигналов, VACUUM "
+                             "выполнен", n)
                 except Exception as e:
                     log.warning("VACUUM отложен: %s", e)
         except sqlite3.OperationalError as e:

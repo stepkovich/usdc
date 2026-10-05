@@ -43,8 +43,13 @@ KEEP = (["ts", "symbol", "spread_bp", "imb5", "imb10", "imb20",
          "fwd", "y"] + LADDER_FEATS)
 WINDOW_DAYS = 7      # память Кегла конечна (13ГБ), данные растут ~5М/день
 
-files = sorted(glob.glob("/kaggle/input/usdc-lob-features/**/*.parquet",
-                         recursive=True))
+files = sorted(glob.glob("/kaggle/input/**/*.parquet", recursive=True))
+# Кегл сменил структуру монтирования (/kaggle/input/datasets/<owner>/...):
+# ищем по всему входу — slug остаётся уникальным
+if not files:
+    json.dump({"error": "нет parquet во входе"},
+              open("/kaggle/working/lob_report.json", "w"), indent=1)
+    raise SystemExit(0)
 def _fday(p):
     m = re.search(r"feat_(\d{8})_", p)
     return m.group(1) if m else ""

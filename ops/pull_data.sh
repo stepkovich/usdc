@@ -24,3 +24,9 @@ if [ -s "$STAGE/dataset-metadata.json" ] && ls "$STAGE"/*.parquet > /dev/null 2>
   cd "$STAGE" && python3 -m kaggle datasets version -p . -m "hourly" >> /home/iek/lob_archive/kaggle_push.log 2>&1 || \
   /home/iek/PycharmProjects/USDC/ops/tg_notify.sh "⚠️ Не удалось обновить датасет стакана на Кегле"
 fi
+# Архив стакана растёт ~1.1ГБ/день (сырые уровни с 01.10): если на
+# локальном диске остаётся меньше 100ГБ — кричим, пока не поздно
+FREE_GB=$(df --output=avail -BG /home | tail -1 | tr -dc '0-9')
+if [ -n "$FREE_GB" ] && [ "$FREE_GB" -lt 100 ]; then
+  /home/iek/PycharmProjects/USDC/ops/tg_notify.sh "⚠️ Локальный диск: свободно ${FREE_GB}ГБ — архив стакана пора подрезать"
+fi
