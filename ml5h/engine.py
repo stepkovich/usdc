@@ -427,7 +427,7 @@ class Ml5hEngine:
                 pos["exit_deadline"] = time.time() + self.c.exit_ttl_s
                 return
         oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
-                                      pos["qty"])
+                                      pos["qty"], reduce_only=True)
         info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                        oid) if oid else None
         exit_px = float((info or {}).get("avgPrice") or 0)
@@ -461,7 +461,7 @@ class Ml5hEngine:
                 pos["exit_deadline"] = time.time() + self.c.exit_ttl_s
                 return
         oid = await asyncio.to_thread(self.ex.place_market, sym, "SELL",
-                                      pos["qty"])
+                                      pos["qty"], reduce_only=True)
         info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                        oid) if oid else None
         exit_px = float((info or {}).get("avgPrice") or 0)

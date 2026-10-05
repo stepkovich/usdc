@@ -272,11 +272,14 @@ class LobBot:
 
     def order(self, sym: str, side: str, ptype: str, qty: Decimal,
               price: float | None = None, tif: str | None = None,
-              pos_side: str | None = None) -> int | None:
+              pos_side: str | None = None,
+              reduce_only: bool = False) -> int | None:
         kw = dict(symbol=sym, side=side, type=ptype, quantity=float(qty))
         if self.hedge:
             kw["position_side"] = pos_side or ("LONG" if side == "BUY"
                                                else "SHORT")
+        if reduce_only:
+            kw["reduce_only"] = True     # закрытие: пыль < 5 номинала ок
         if ptype == "LIMIT":
             kw["price"] = price
             kw["time_in_force"] = tif or "GTC"
@@ -457,7 +460,7 @@ class LobBot:
                     pos["exit_deadline"] = time.time() + EXIT_TTL_S
                     return
         oid = self.order(sym, side, "MARKET", pos["qty"],
-                         pos_side=pos["pside"])
+                         pos_side=pos["pside"], reduce_only=True)
         info = self.order_info(sym, oid) if oid else None
         exit_px = float((info or {}).get("avgPrice") or 0)
         self.finish(sym, pos, exit_px, "taker_fb")

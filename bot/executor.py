@@ -282,7 +282,8 @@ class Executor:
         return int(oid) if oid is not None else None
 
     def place_market(self, symbol: str, side: str, qty: Decimal,
-                     pos_side: str | None = None) -> int | None:
+                     pos_side: str | None = None,
+                     reduce_only: bool = False) -> int | None:
         for attempt in range(2):
             try:
                 kw = dict(symbol=symbol, side=NewOrderSideEnum[side].value,
@@ -290,6 +291,10 @@ class Executor:
                           quantity=self._plain(qty))
                 if self.hedge_mode:
                     kw["position_side"] = pos_side or self._pside(side)
+                if reduce_only:
+                    # закрытие: позволяет номинал < 5 (пыль) — биржа иначе
+                    # отвечает -4164 и позиция не закрывается никогда
+                    kw["reduce_only"] = NewOrderReduceOnlyEnum.TRUE
                 r = self.client.rest_api.new_order(**kw)
                 return int(r.data().order_id)
             except BinanceError as e:

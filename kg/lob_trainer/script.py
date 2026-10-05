@@ -19,7 +19,7 @@ v2 (01.10, А1 «многоуровневый стакан»): рекордер 
 lob_feats.json пишется ВСЕГДА со списком признаков выбранной модели
 (движок по нему строит вектор — иначе несходство числа фич).
 """
-import glob, json, os
+import glob, json, os, re
 import json as _json
 import numpy as np, pandas as pd, lightgbm as lgb
 
@@ -36,51 +36,80 @@ BASE_COLS = (["ts", "symbol", "mid", "spread_bp", "microprice",
               "imb5", "imb10", "imb20", "bid_sum20", "ask_sum20",
               "flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell",
               "ntr10", "vpin10"] + LADDER_FEATS)
+FLOAT_COLS = [c for c in BASE_COLS if c not in ("ts", "symbol")]
+KEEP = (["ts", "symbol", "spread_bp", "imb5", "imb10", "imb20",
+         "flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell",
+         "ntr10", "vpin10", "microprice_rel", "d30", "d120",
+         "fwd", "y"] + LADDER_FEATS)
+WINDOW_DAYS = 7      # память Кегла конечна (13ГБ), данные растут ~5М/день
+
+files = sorted(glob.glob("/kaggle/input/usdc-lob-features/**/*.parquet",
+                         recursive=True))
+def _fday(p):
+    m = re.search(r"feat_(\d{8})_", p)
+    return m.group(1) if m else ""
+days_all = sorted({_fday(f) for f in files if _fday(f)})
+if len(days_all) > WINDOW_DAYS:
+    cut = days_all[-WINDOW_DAYS]
+    files = [f for f in files if _fday(f) >= cut]
+print(f"файлов в окне: {len(files)} (с {days_all[-WINDOW_DAYS] if len(days_all) > WINDOW_DAYS else 'начала'})", flush=True)
 
 frames = []
-for f in sorted(glob.glob("/kaggle/input/usdc-lob-features/**/*.parquet",
-                          recursive=True)):
+for f in files:
     try:
         try:                                    # новый формат (21 колонка)
-            frames.append(pd.read_parquet(f, columns=BASE_COLS))
+            df_f = pd.read_parquet(f, columns=BASE_COLS,
+                                   dtype={c: "float32"
+                                          for c in FLOAT_COLS})
         except Exception:                       # старый (16) — лестницы нет
-            df_old = pd.read_parquet(f, columns=BASE_COLS[:16])
+            df_f = pd.read_parquet(f, columns=BASE_COLS[:16],
+                                   dtype={c: "float32"
+                                          for c in FLOAT_COLS[:14]})
             for c in LADDER_FEATS:
-                df_old[c] = np.nan
-            frames.append(df_old)
+                df_f[c] = np.float32(np.nan)
+        frames.append(df_f)
     except Exception:
         print("битый файл пропущен:", f, flush=True)
-df = pd.concat(frames, ignore_index=True).drop_duplicates(["ts", "symbol"]) \
-       .sort_values(["symbol", "ts"]).reset_index(drop=True)
+df = pd.concat(frames, ignore_index=True).drop_duplicates(["ts", "symbol"])
+del frames
+df.sort_values(["symbol", "ts"], inplace=True)
+df.reset_index(drop=True, inplace=True)
 print(f"строк {len(df)}, символов {df['symbol'].nunique()}, "
       f"с лестницей {int(df[LADDER_FEATS[0]].notna().sum())}", flush=True)
 
 parts = []
 medians = {}
-for sym, g in df.groupby("symbol"):
+for sym, g in df.groupby("symbol", observed=True):
     g = g.sort_values("ts").reset_index(drop=True)
-    ts, mid = g["ts"].values, g["mid"].values
+    ts = g["ts"].values
+    mid = g["mid"].values.astype("float64")
     idx = np.clip(ts.searchsorted(ts + HORIZON_S * 1000), 0, len(g) - 1)
     ok = ts[idx] >= ts + HORIZON_S * 1000 - 1500
-    g["mid_fut"] = np.where(ok, mid[idx], np.nan)
-    g["y"] = (g["mid_fut"] / mid > 1).astype(float)
-    g.loc[g["mid_fut"].isna(), "y"] = np.nan
+    mid_fut = np.where(ok, mid[idx], np.nan)
+    g["fwd"] = (mid_fut / mid - 1).astype("float32")
+    g["y"] = np.where(np.isnan(mid_fut), np.nan,
+                      (mid_fut / mid > 1).astype("float32"))
     for lag_ms, name in ((30_000, "d30"), (120_000, "d120")):
         j = np.clip(ts.searchsorted(ts - lag_ms), 0, len(g) - 1)
         past = np.where(np.abs(ts[j] - (ts - lag_ms)) <= LAG_TOL_MS,
                         mid[j], np.nan)
-        g[name] = mid / past - 1
-    g["microprice_rel"] = (g["microprice"] / g["mid"] - 1) * 10000
+        g[name] = (mid / past - 1).astype("float32")
+    g["microprice_rel"] = (g["microprice"].astype("float64") / mid - 1) \
+        .astype("float32")
     sym_meds = {}
     for c in ("flow10_buy", "flow10_sell", "flow60_buy", "flow60_sell",
               "ntr10"):
         med = g[c].median()
         med = float(med) if med and med > 0 else 1.0
         sym_meds[c] = med
-        g[c] = g[c] / med
+        g[c] = (g[c].astype("float64") / med).astype("float32")
     medians[sym] = sym_meds
-    parts.append(g)
-ds = pd.concat(parts, ignore_index=True).dropna(subset=FEATS + ["y"])
+    parts.append(g[KEEP])
+    del g
+del df
+ds = pd.concat(parts, ignore_index=True)
+del parts
+ds = ds.dropna(subset=FEATS + ["y"]).reset_index(drop=True)
 ds["day"] = pd.to_datetime(ds["ts"], unit="ms").dt.date
 days = sorted(ds["day"].unique())
 print(f"дней {len(days)}: {days[0]}..{days[-1]}, строк {len(ds)}", flush=True)
@@ -103,7 +132,7 @@ def walk_forward(data, feats, test_days):
         m = lgb.LGBMClassifier(**PARAMS)
         m.fit(tr[feats], tr["y"])
         p = m.predict_proba(te[feats])[:, 1]
-        fwd = te["mid_fut"] / te["mid"] - 1
+        fwd = te["fwd"]
         q75, q25 = np.quantile(p, 0.75), np.quantile(p, 0.25)
         spread = (fwd[p >= q75].mean() - fwd[p <= q25].mean()) * 10000
         acc = ((p > 0.5) == (te["y"] == 1)).mean() * 100
@@ -177,7 +206,7 @@ elif len(days_b) >= 2:
             m = lgb.LGBMClassifier(**PARAMS)
             m.fit(tr[feats], tr["y"])
             p = m.predict_proba(te[feats])[:, 1]
-            fwd = te["mid_fut"] / te["mid"] - 1
+            fwd = te["fwd"]
             q75, q25 = np.quantile(p, 0.75), np.quantile(p, 0.25)
             spread = (fwd[p >= q75].mean() - fwd[p <= q25].mean()) * 10000
             acc = ((p > 0.5) == (te["y"] == 1)).mean() * 100

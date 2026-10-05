@@ -185,6 +185,9 @@ def _main() -> None:
             print("lob status:", st, flush=True)
             if st in ("complete", "error", "cancelAcknowledged"):
                 break
+        if st == "error":
+            tg("🧠❌ Стакан: ядро обучения упало на Кегле — работаем на "
+               "старой модели, разбор нужен")
         if st == "complete":
             out = kaggle("kernels", "output", "sewerted/usdc-lob-train",
                          "-p", "/root/kg/lob_out", timeout=600)
