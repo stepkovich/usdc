@@ -89,10 +89,14 @@ class Ml5hEngine:
         meta = json.loads(self.c.meta_path.read_text())
         self.feats = meta["features"]
         self.symbols = self.c.symbols or meta["symbols"]
+        # порог принадлежит МОДЕЛИ (у модели-бури 0.65, у старой 0.55):
+        # едет в артефакте вместе с ней, чтобы они не разъехались
+        if meta.get("gate"):
+            self.c.gate = float(meta["gate"])
         self.model = lgb.Booster(model_file=str(self.c.model_path))
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
-                 meta.get("gate", self.c.gate))
+                 self.c.gate)
         # биржа — источник правды: символы, которых нет на демо, отсеиваем
         await asyncio.to_thread(self.ex.build_filters, self.symbols)
         live = [s for s in self.symbols if s in self.ex.filters]
@@ -154,6 +158,8 @@ class Ml5hEngine:
                 # измениться (иначе предсказание падает по числу колонок)
                 meta = json.loads(self.c.meta_path.read_text())
                 self.feats = meta["features"]
+                if meta.get("gate"):
+                    self.c.gate = float(meta["gate"])
                 new_syms = [s for s in (self.c.symbols or meta["symbols"])
                             if s not in self.symbols]
                 self.symbols = self.c.symbols or meta["symbols"]
