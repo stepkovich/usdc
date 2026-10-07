@@ -1,28 +1,29 @@
 {
+ "trained_at": "2026-10-06T09:40:53.413201+00:00",
  "features": [
   "ret_1",
   "ret_4",
   "ret_10",
   "ret_20",
+  "h4_momentum",
   "atr_pct",
   "std_20",
+  "skew",
   "vol_ratio",
   "taker_buy",
   "clv",
   "zscore",
   "rsi",
-  "skew",
   "sma_cross",
   "btc_ret_10",
   "btc_ret_20",
   "btc_corr",
-  "h4_momentum",
-  "hour",
-  "dow",
   "rel_ret_20",
   "rel_ret_60",
   "beta_20",
   "corr_20",
+  "hour",
+  "dow",
   "sym_id"
  ],
  "symbols": [
@@ -315,6 +316,7 @@
   "MANAUSDT",
   "MANTAUSDT",
   "MANTRAUSDT",
+  "MARSCOINUSDT",
   "MASKUSDT",
   "MAVIAUSDT",
   "MAVUSDT",
@@ -381,6 +383,7 @@
   "PNUTUSDT",
   "POLUSDT",
   "POLYXUSDT",
+  "PONSUSDT",
   "POPCATUSDT",
   "PORTALUSDT",
   "POWERUSDT",
@@ -547,105 +550,12 @@
   "ZROUSDT",
   "ZRXUSDT"
  ],
- "gate": 0.55,
+ "gate": 0.65,
  "hold_bars": 10,
  "bar_minutes": 30,
- "universe": "wide-full-data",
- "train_rows": 20518412,
+ "label": "storm_05atr_both_sides",
+ "train_rows": 16209571,
+ "universe": "wide-522",
  "verdict": true,
- "long_avg": 0.6022,
- "long_skill": 1.536,
- "folds": [
-  {
-   "quarter": "2022Q2",
-   "long": {
-    "trades": 26459,
-    "avg": 0.3268,
-    "skill": 1.0614
-   },
-   "short": {
-    "trades": 26492,
-    "avg": 0.8965,
-    "skill": 1.5718
-   }
-  },
-  {
-   "quarter": "2023Q1",
-   "long": {
-    "trades": 27418,
-    "avg": 0.6793,
-    "skill": 1.3077
-   },
-   "short": {
-    "trades": 29285,
-    "avg": 0.3009,
-    "skill": 1.2386
-   }
-  },
-  {
-   "quarter": "2023Q4",
-   "long": {
-    "trades": 35883,
-    "avg": 0.7183,
-    "skill": 1.253
-   },
-   "short": {
-    "trades": 43685,
-    "avg": 0.2122,
-    "skill": 1.0812
-   }
-  },
-  {
-   "quarter": "2024Q2",
-   "long": {
-    "trades": 49827,
-    "avg": 0.3725,
-    "skill": 1.7996
-   },
-   "short": {
-    "trades": 49023,
-    "avg": 0.5687,
-    "skill": 1.2842
-   }
-  },
-  {
-   "quarter": "2025Q1",
-   "long": {
-    "trades": 69399,
-    "avg": 0.3488,
-    "skill": 1.0969
-   },
-   "short": {
-    "trades": 68483,
-    "avg": 0.6781,
-    "skill": 1.6381
-   }
-  },
-  {
-   "quarter": "2025Q4",
-   "long": {
-    "trades": 104970,
-    "avg": 0.8328,
-    "skill": 2.6262
-   },
-   "short": {
-    "trades": 113420,
-    "avg": 0.7848,
-    "skill": 1.6938
-   }
-  },
-  {
-   "quarter": "2026Q3",
-   "long": {
-    "trades": 78631,
-    "avg": 0.6762,
-    "skill": 1.6103
-   },
-   "short": {
-    "trades": 87165,
-    "avg": 0.4744,
-    "skill": 1.3608
-   }
-  }
- ]
+ "note": "\u0431\u043e\u0435\u0432\u0430\u044f \u043c\u043e\u0434\u0435\u043b\u044c-\u0431\u0443\u0440\u044f: \u043b\u043e\u043d\u0433 p>0.65 / \u0448\u043e\u0440\u0442 p<0.35 (\u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430 06.10, \u0437\u0430\u043c\u0435\u043d\u0430 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a\u0430)"
 }
