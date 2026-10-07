@@ -472,6 +472,42 @@ class LobBot:
                              "ts": time.time(), "px": px_f}
         self.log_signal(sym, p, mid, pside, oid)
 
+    def place_tp(self, sym: str, entry_px: float, pside: str,
+                 qty: Decimal) -> None:
+        """Тейк-лимитка на 0.25×ATR(5м) от входа (GTX, reduce-only).
+        ATR считаем по 5м свечам боевого REST. Не вышло — просто нет
+        тейка, будильник остаётся (как было)."""
+        try:
+            kl = self.ex.fetch_klines(sym, "5m", 16)
+            trs = []
+            prev_c = None
+            for row in reversed(kl[-15:]):        # от старых к новым
+                vals = row if isinstance(row, list) else None
+                if vals is None or len(vals) < 5:
+                    continue
+                h, l, c = float(vals[2]), float(vals[3]), float(vals[4])
+                tr = max(h - l, abs(h - prev_c) if prev_c else h - l,
+                         abs(l - prev_c) if prev_c else h - l)
+                trs.append(tr)
+                prev_c = c
+            if len(trs) < 8:
+                return
+            atr = sum(trs) / len(trs)
+            tp_px = entry_px * (1 + 0.25 * atr / entry_px) \
+                if pside == "LONG" \
+                else entry_px * (1 - 0.25 * atr / entry_px)
+            tp_px = self.px_on_grid(sym, tp_px,
+                                    "SELL" if pside == "LONG" else "BUY")
+            side = "SELL" if pside == "LONG" else "BUY"
+            oid = self.order(sym, side, "LIMIT", qty, price=tp_px,
+                             tif="GTX", pos_side=pside, reduce_only=True)
+            if oid is not None:
+                self.pos[sym]["tp_oid"] = oid
+                self.pos[sym]["tp_px"] = tp_px
+                log.info("%s: тейк выставлен @%s (0.25 ATR)", sym, tp_px)
+        except Exception:
+            log.exception("%s: тейк не выставлен — будильник", sym)
+
     def close_position(self, sym: str, pos: dict, maker: bool) -> None:
         side = "SELL" if pos["pside"] == "LONG" else "BUY"
         if maker:
@@ -538,6 +574,9 @@ class LobBot:
                 self.pending.pop(sym, None)
                 self.pos[sym] = {**pend, "entry_ts": time.time(), "px": px}
                 log.info("ОТКРЫТО %s %s @%s", sym, pend["pside"], px)
+                # ТЕЙК 0.25×ATR(5м) (замер 07.10: +8бп/сд, fill 63%):
+                # GTX-лимитка сразу после входа; не встала — будильник
+                self.place_tp(sym, px, pend["pside"], pend["qty"])
             elif st in ("CANCELED", "EXPIRED", "REJECTED"):
                 self.pending.pop(sym, None)
             return
@@ -558,6 +597,19 @@ class LobBot:
                 log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%%", sym,
                             float(loss) * 100)
                 self.close_position(sym, pos, maker=False)
+                return
+        if "tp_oid" in pos:
+            info_tp = self.order_info(sym, pos["tp_oid"])
+            st_tp = (info_tp or {}).get("status")
+            if st_tp == "FILLED":
+                self.finish(sym, pos,
+                            float(info_tp.get("avgPrice") or 0), "tp_atr")
+                return
+            if time.time() - pos["entry_ts"] >= HOLD_S:
+                # будильник: тейк отменяем, закрываем как обычно
+                self.cancel(sym, pos["tp_oid"])
+                pos.pop("tp_oid", None)
+                self.close_position(sym, pos, maker=True)
                 return
         if "exit_oid" in pos:
             if time.time() > pos["exit_deadline"]:

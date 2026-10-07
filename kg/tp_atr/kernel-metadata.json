@@ -1,0 +1,13 @@
+{
+  "id": "sewerted/usdc-tp-atr",
+  "title": "usdc-tp-atr",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": ["sewerted/usdc-lob-features"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
