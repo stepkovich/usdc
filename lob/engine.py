@@ -129,10 +129,14 @@ class LobBot:
         if self.cfg.lob.symbols:          # вселенная задана руками
             pass
         else:                              # НА ВСЕХ: все живые USDC-перпетуалы
+            # DEMO_EXCLUDE: демо-матчинг этих монет глючит (ORDIUSDC:
+            # фантомный +155 01.10, призрачные позиции 07.10) — не торгуем
+            demo_exclude = {"ORDIUSDC"}
             self.SYMS = sorted(s["symbol"] for s in d.get("symbols", [])
                                if s.get("symbol", "").endswith("USDC")
                                and s.get("status") == "TRADING"
-                               and s.get("contractType") == "PERPETUAL")
+                               and s.get("contractType") == "PERPETUAL"
+                               and s.get("symbol") not in demo_exclude)
             log.info("вселенная стакана: автообнаружено %d USDC-пар",
                      len(self.SYMS))
         for s in d.get("symbols", []):
@@ -452,7 +456,10 @@ class LobBot:
             top = self.book_top(sym)
             if top:
                 bb, ba = top
-                px = self.px_on_grid(sym, ba if side == "SELL" else bb, side)
+                # выход на СЕРЕДИНЕ спреда (не на дальнем краю): цена
+                # доходит вдвое быстрее, мейкер-доля 28% -> ~100% (замер 07.10)
+                mid_px = (bb + ba) / 2.0
+                px = self.px_on_grid(sym, mid_px, side)
                 oid = self.order(sym, side, "LIMIT", pos["qty"], price=px,
                                  tif="GTX", pos_side=pos["pside"])
                 if oid is not None:

@@ -1,0 +1,13 @@
+{
+  "id": "sewerted/usdc-nn-candles",
+  "title": "usdc-nn-candles",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": ["sewerted/usdc-panel-downloader"]
+}
