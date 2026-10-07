@@ -368,7 +368,14 @@ class Executor:
         try:
             r = self.market_client.rest_api.order_book(symbol=symbol, limit=5).data()
             d = r.model_dump(by_alias=True) if hasattr(r, "model_dump") else {}
-            return float(d["bids"][0][0]), float(d["asks"][0][0])
+            bids = d.get("bids") or []
+            asks = d.get("asks") or []
+            # свежие листинги бывают на демо, но ещё нет на боевом REST:
+            # там приходит пустой стакан — это не авария, символа просто
+            # нет; тихо возвращаем None (движки пропустят вход)
+            if not bids or not asks:
+                return None
+            return float(bids[0][0]), float(asks[0][0])
         except Exception as e:
             log.warning("стакан %s: %s", symbol, e)
             return None

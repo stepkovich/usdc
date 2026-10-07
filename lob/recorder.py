@@ -293,6 +293,8 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
                     cut = int((time.time() - 7 * 86400) * 1000)
                     n = conn_sql.execute(
                         "delete from signals where ts < ?", (cut,)).rowcount
+                    # VACUUM нельзя внутри транзакции: сначала фиксируем
+                    conn_sql.commit()
                     conn_sql.execute("VACUUM")
                     conn_sql.commit()
                     log.info("уборка: удалено %d старых сигналов, VACUUM "

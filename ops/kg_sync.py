@@ -146,7 +146,11 @@ def _main() -> None:
     now_dt = datetime.now(timezone.utc)
     mflag = FLAGS / f"monthly_retrain_{now_dt:%Y-%m}"
     want_monthly = now_dt.day <= 7 and not mflag.exists()
-    want_signal = retrain_flag.exists()
+    # СИГНАЛЬНОЕ переобучение ОТКЛЮЧЕНО (06.10): сигнал «30 сделок в
+    # минусе» летал от мелких серий и жёг часы Кегла на переобучение
+    # старого вопроса без новых данных. Переобучение — планово раз в
+    # месяц, на свежей панели;mid-month судья — демо-журнал и владелец.
+    want_signal = False
     if (want_monthly or want_signal) and (FLAGS / "panel_done").exists():
         # 1) обновляем панель (кернел-загрузчик добавит свежие месяцы)
         kg_dl = Path("/root/kg/panel_downloader")
