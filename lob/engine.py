@@ -129,14 +129,10 @@ class LobBot:
         if self.cfg.lob.symbols:          # вселенная задана руками
             pass
         else:                              # НА ВСЕХ: все живые USDC-перпетуалы
-            # DEMO_EXCLUDE: демо-матчинг этих монет глючит (ORDIUSDC:
-            # фантомный +155 01.10, призрачные позиции 07.10) — не торгуем
-            demo_exclude = {"ORDIUSDC"}
             self.SYMS = sorted(s["symbol"] for s in d.get("symbols", [])
                                if s.get("symbol", "").endswith("USDC")
                                and s.get("status") == "TRADING"
-                               and s.get("contractType") == "PERPETUAL"
-                               and s.get("symbol") not in demo_exclude)
+                               and s.get("contractType") == "PERPETUAL")
             log.info("вселенная стакана: автообнаружено %d USDC-пар",
                      len(self.SYMS))
         for s in d.get("symbols", []):
@@ -204,6 +200,32 @@ class LobBot:
                 amt = Decimal(str(d.get("positionAmt", "0")))
                 if sym in self.SYMS and amt != 0:
                     live[sym] = d
+            # СТОРОЖ (07.10, висячий ORDI): позиция старше холда+180с —
+            # закрываем рынком по правде биржи (наша книжка могла соврать:
+            # демо-API врал side/amt). Дальше реконсиляция сама запишет
+            # внешний выход с биржевым PnL.
+            for sym in list(self.pos):
+                pos_d = self.pos[sym]
+                age = time.time() - pos_d.get("entry_ts", 0)
+                if age < HOLD_S + 180:
+                    continue
+                try:
+                    live_rows = self.ex.position_information_for([sym])
+                    for d2 in live_rows:
+                        amt = float(d2.get("positionAmt", 0) or 0)
+                        if amt == 0:
+                            continue
+                        ex_side = "LONG" if amt > 0 else "SHORT"
+                        log.error("%s: СТОРОЖ age=%.0fs (наш %s, биржа %s "
+                                  "%.4f) — рынком", sym, age,
+                                  pos_d.get("pside"), ex_side, amt)
+                        side = "SELL" if ex_side == "LONG" else "BUY"
+                        self.order(sym, side, "MARKET",
+                                   Decimal(str(abs(amt))),
+                                   pos_side=ex_side if self.hedge else None,
+                                   reduce_only=True)
+                except Exception:
+                    log.exception("сторож %s", sym)
             for sym, d in live.items():
                 if sym in self.pos or sym in self.pending:
                     continue
