@@ -432,15 +432,21 @@ class LobBot:
                 self.feats = _json2.load(open(pf))
             except Exception as e:
                 log.warning("lob_feats.json не читается (%s) — дефолт", e)
-        if self.model is None and MODEL.exists():
+        if MODEL.exists():
+            # заменяем ВСЕГДА при новом mtime: старая логика грузила
+            # только при self.model is None — ночной деплой новой модели
+            # с ДРУГИМ числом признаков рвал предсказание (09.10, 1848
+            # ошибок «13 != 18» полтора часа)
             try:
                 import lightgbm as lgb
+                was = self.model is not None
                 self.model = lgb.Booster(model_file=str(MODEL))
                 import bot.telegram as tg
                 tg.fire("🧠 <b>Стакан</b>: модель получена — начинаю "
                         "оценивать очереди")
-                log.info("модель загружена из файла (%d признаков)",
-                         len(self.feats))
+                log.info("модель загружена из файла (%d признаков%s)",
+                         len(self.feats),
+                         ", замена" if was else "")
             except Exception as e:
                 log.warning("модель не загрузилась: %s", e)
 

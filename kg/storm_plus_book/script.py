@@ -1,4 +1,12 @@
-"""БУРЯ + КНИГА: ПОЛНЫЙ А/Б-ЭКЗАМЕН (предрегистрация 07.10, «кусочек»).
+"""ПОДТВЕРЖДЕНИЕ «КУСОЧКА» (08.10, отложенное правило). Первый прогон
+(тест 02-05.10) дал Δ+6.5 бп, НО 1/4 плюс-дней и день-локомотив 02.10.
+Правило из шапки первого прогона: перед вносом — подтверждение на
+СВЕЖИХ днях, которых прогон не видел. Этот прогон = тест 06-08.10
+(последние 3 полных дня записи), обучение на всём до них.
+ПОДТВЕРЖДЕНО, если Δ(B−A) >= +3 бп И avg(B) > 0. Подтвердится —
+вносим книгу в Бурю для 37 монет с недельным наблюдением в бою.
+"""
+"""(архив шапки) БУРЯ + КНИГА: ПОЛНЫЙ А/Б-ЭКЗАМЕН (предрегистрация 07.10, «кусочек»).
 
 ВОПРОС: находка выходных — книга заявок улучшает ПОИСК бури на +5пп
 (4/4 дня, 30-мин окно). Превращается ли это в ДЕНЬГИ у боевой модели-
@@ -33,7 +41,7 @@ GATE = 0.65
 COOLDOWN_MS = 10 * 1800_000
 TAKER_OUT = 0.0010
 STOP = 0.15
-N_TEST_DAYS = 4
+N_TEST_DAYS = 3
 PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
               subsample=0.8, colsample_bytree=0.8, random_state=42,
               n_jobs=4, verbosity=-1, class_weight="balanced")
@@ -181,21 +189,25 @@ candles = pd.concat(cframes, ignore_index=True)
 del cframes
 print(f"свечных строк {len(candles)}", flush=True)
 
-book_frames = []
+# КНИГА: сразу сворачиваем в 30м бины при чтении — иначе 23М+ строк
+# рвут память CPU-инстанса (виновник ERROR после 3ч вчера)
+book_parts = []
 for f in sorted(glob.glob("/kaggle/input/**/*.parquet", recursive=True)):
     try:
-        book_frames.append(pd.read_parquet(
+        bf = pd.read_parquet(
             f, columns=["ts", "symbol", "mid", "microprice", "imb5",
                         "imb10", "imb20", "flow10_buy", "flow10_sell",
-                        "vpin10"]))
+                        "vpin10"])
+        bf["bin"] = (bf["ts"] // 1_800_000) * 1_800_000
+        g = bf.sort_values("ts").groupby(["symbol", "bin"]).last()             .reset_index()
+        book_parts.append(g)
+        del bf
     except Exception:
         pass
-book = pd.concat(book_frames, ignore_index=True)
-del book_frames
+book = pd.concat(book_parts, ignore_index=True)
+del book_parts
 print(f"книжных строк {len(book)} | {time.time()-t0:.0f}с", flush=True)
-book["bin"] = (book["ts"] // 1_800_000) * 1_800_000
-binned = book.sort_values("ts").groupby(["symbol", "bin"]).last() \
-    .reset_index()
+binned = book.rename(columns={"bin": "bin"})
 binned["microprice_rel"] = (binned["microprice"] / binned["mid"] - 1) \
     * 10000
 tot10 = binned["flow10_buy"] + binned["flow10_sell"]

@@ -1,4 +1,10 @@
-"""ПРОБА НЕЙРОСЕТИ НА СТАКАНЕ (предрегистрация 07.10, тест механизма).
+"""РЕТРАЙ ПРОБЫ НЕЙРОСЕТИ (08.10): данных стало вдвое больше (~11
+дней записи), эпох 4 вместо 2. Правила прежние: намёк = навык сети >
+дерева на +1 бп на обоих тест-днях. Планка: дерево-реплика спринтера.
+Проба, не решение о бое.
+
+СТАРЫЙ ЗАГОЛОВОК:"""
+"""(архив) ПРОБА НЕЙРОСЕТИ НА СТАКАНЕ (предрегистрация 07.10, тест механизма).
 
 ЗАЧЕНО ДО ЗАПУСКА: это ТЕСТ МЕХАНИЗМА по приказу владельца («сделай на
 том что есть»), НЕ решение о бое. Вопрос один: (а) собирается ли ГПУ-
@@ -221,7 +227,7 @@ class LSTMNet(nn.Module):
         o, _ = self.lstm(x)
         return self.head(o[:, -1])
 
-def train_torch(model, Xtr, ytr, Xva, yva, epochs=2, bs=8192):
+def train_torch(model, Xtr, ytr, Xva, yva, epochs=4, bs=8192):
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     lossf = nn.CrossEntropyLoss()
     Xt = torch.tensor(Xtr, device=DEV)
@@ -276,10 +282,11 @@ raw_cols = (["ts", "symbol", "mid"]
             + [f"ask_p_{i}" for i in range(1, 21)]
             + [f"ask_q_{i}" for i in range(1, 21)])
 rframes = []
+raw_files = raw_files[-90:]               # последние ~9 дней (память)
 for f in raw_files:
     try:
         rf = pd.read_parquet(f, columns=raw_cols)
-        rf = rf.iloc[::4]                  # 2с каденс
+        rf = rf.iloc[::8]                  # 4с каденс (память GPU-хоста)
         rframes.append(rf)
     except Exception:
         pass
@@ -340,7 +347,7 @@ if mtr.sum() > 100000 and mte.sum() > 10000:
     yt2 = torch.tensor(yr[mtr].astype("int64"), device=DEV)
     opt = torch.optim.Adam(model2.parameters(), lr=1e-3)
     lossf = nn.CrossEntropyLoss()
-    for ep in range(2):
+    for ep in range(4):
         model2.train()
         perm = torch.randperm(len(Xt2), device=DEV)
         for i in range(0, len(Xt2), 8192):
@@ -359,6 +366,8 @@ if mtr.sum() > 100000 and mte.sum() > 10000:
             xb = torch.tensor(Xr[mte][i:i + 65536], device=DEV)
             prs.append(model2(xb).softmax(1)[:, 1].cpu().numpy())
     pr = np.concatenate(prs)
+    print(f"    CNN диагностика: std(p)={pr.std():.5f} min={pr.min():.4f} "
+          f"max={pr.max():.4f}", flush=True)
     acc_raw = float(((pr > 0.5) == (yr[mte] > 0.5)).mean() * 100)
     q20, q80 = np.quantile(pr, [0.2, 0.8])
     fwd_te = fr[mte]
