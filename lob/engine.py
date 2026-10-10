@@ -47,7 +47,10 @@ GATE = 0.62
 HOLD_S = 300
 RISK_PCT = Decimal("0.0015")      # риск одной сделки, доля баланса
 DAY_CAP_PCT = Decimal("0.005")    # дневной кап убытка, доля баланса
-MAX_NOTIONAL = Decimal("300")
+# 300 лопнуло дважды (CRV -1.06, TIA -8.96 = 90x риска 0.10): буфер
+# "ход = 3x спред" на узких спредах даёт нотариал до 300, а рынок ходит
+# 30-70x спреда. 25 ограничивает хвост ~1.4 USDC даже при ходе -5.5%.
+MAX_NOTIONAL = Decimal("25")
 MIN_NOTIONAL = Decimal("8")
 MAX_SLOTS = 3
 ENTRY_TTL_S = 60
@@ -544,6 +547,13 @@ class LobBot:
         if exit_px <= 0 and exchange_pnl is not None:
             pnl = exchange_pnl
             exit_fee = "external_birzha"
+            # цену выхода восстанавливаем из PnL биржи: для линейного
+            # контракта exit = entry ± pnl/qty (погрешность = комиссии)
+            q = Decimal(str(pos["qty"]))
+            if q > 0:
+                mult = Decimal(1) if pos["pside"] == "LONG" else Decimal(-1)
+                exit_px = float(Decimal(str(pos["px"]))
+                                + Decimal(str(pnl)) / q * mult)
         else:
             if exit_px <= 0:
                 top = self.book_top(sym)
