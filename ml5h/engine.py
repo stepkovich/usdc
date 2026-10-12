@@ -269,6 +269,7 @@ class Ml5hEngine:
         self.btc_close = btc["close"] if btc is not None else None
         # 1) оценка ВСЕХ доступных символов бара (только закрытые бары в df)
         scored = []
+        atrs = []          # atr_pct всей вселенной этого бара — для фильтра
         for sym in self.symbols:
             if sym not in self.bars or sym in self.pos or sym in self.pending:
                 continue
@@ -283,8 +284,25 @@ class Ml5hEngine:
                 log.warning("%s: ошибка оценки (%s) — символ исключён",
                             sym, str(e)[:60])
                 continue
+            atr = x.get("atr_pct")
+            if atr is not None and np.isfinite(atr):
+                atrs.append(float(atr))
             if p > self.c.gate or p < 1 - self.c.gate:
-                scored.append((abs(p - 0.5), p, sym))
+                scored.append([abs(p - 0.5), p, sym, atr])
+        # 1.5) фильтр «тихая треть» (рентген 12.10: сделки в нижней
+        #      терцили ATR вселенной −3.2бп на 21.8к сделок, летучая
+        #      треть +85.7). Порог = живая 1/3-квантиль atr_pct вселенной
+        #      этого бара — каузально и без констант из прошлого.
+        if scored and len(atrs) >= 30:
+            q33 = float(np.quantile(atrs, 1 / 3))
+            before = len(scored)
+            scored = [s for s in scored
+                      if s[3] is not None and np.isfinite(s[3])
+                      and s[3] >= q33]
+            if len(scored) < before:
+                log.info("тихая-треть: отсечено %d из %d кандидатов "
+                         "(порог atr %.5f)", before - len(scored), before,
+                         q33)
         # 2) сортировка по уверенности (расстояние от 50%): самые уверенные
         #    входят первыми. Раньше при нехватке мест входили первые ПО
         #    АЛФАВИТУ — уверенность игнорировалась (дыра найдена владельцем).
@@ -293,7 +311,7 @@ class Ml5hEngine:
             log.info("бар: кандидатов %d, лучшая уверенность %.3f (%s)",
                      len(scored), scored[0][1], scored[0][2])
         slots = len(self.pos) + len(self.pending)
-        for conf, p, sym in scored:
+        for conf, p, sym, _atr in scored:
             if slots >= self.c.max_slots:
                 log.info("очередь: %s p=%.3f — слотов нет, ждёт следующего бара",
                          sym, p)
