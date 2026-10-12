@@ -9,7 +9,14 @@ flock -n 9 || { echo "pull_data уже идёт — пропуск"; exit 0; }
 VPS=root@159.65.133.26
 DEST=/home/iek/lob_archive
 mkdir -p "$DEST/ml5h"
-if ! rsync -az --quiet "$VPS:usdc/data/lob/archive/" "$DEST/"; then
+# *.tmp исключаем: рекордер пишет часовой файл через tmp и переименовывает —
+# rsync ловил "file has vanished" (код 24) и будил ТГ ложной тревогой.
+# Код 24 = штатная гонка, недоехавший файл довозит следующий час.
+set +e
+rsync -az --quiet --exclude='*.tmp' "$VPS:usdc/data/lob/archive/" "$DEST/"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 24 ]; then
   /home/iek/PycharmProjects/USDC/ops/tg_notify.sh "⚠️ Приём данных стакана с сервера НЕ УДАЛСЯ — проверь связь"
 fi
 rsync -az --quiet "$VPS:usdc/data/ml5h_trades.csv" "$DEST/ml5h/" 2>/dev/null || true

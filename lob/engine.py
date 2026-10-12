@@ -322,6 +322,14 @@ class LobBot:
                 if api_code(e) == -1021 and attempt == 0:
                     self.resync()
                     continue
+                if api_code(e) == -4164:
+                    # минимум нотариала биржи выше нашего капа (BTC=100):
+                    # символ исключается до конца сессии — не воюем с
+                    # биржей и не ломаем предохранитель 25
+                    self.filters.setdefault(sym, {})["no_notional"] = True
+                    log.warning("%s: минимум нотариала биржи выше капа "
+                                "— символ исключён из торговли", sym)
+                    return None
                 log.warning("ордер %s %s: %s", sym, side, e)
                 return None
         return None
@@ -462,6 +470,8 @@ class LobBot:
 
     def open_position(self, sym: str, side: str, p: float, mid: float,
                       spread_bp: float) -> None:
+        if self.filters.get(sym, {}).get("no_notional"):
+            return
         top = self.book_top(sym)
         if not top:
             return
