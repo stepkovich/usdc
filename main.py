@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from bot.config import Config
+from bot.config import Config, Mode
 from bot.executor import Executor
 import bot.telegram as tg
 import bot.timesync as timesync
@@ -39,19 +39,27 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
             continue
         last_hour = now.hour
         try:
-            ml_open = len(ml5h.pos)
-            ml_day = float(ml5h.day_pnl)
-            lob_open = len(lob.pos)
-            lob_day = float(lob.day_pnl)
-            ml_model = "готова" if ml5h.model else "ждёт артефакт"
-            lob_model = "готова" if lob.model else \
-                f"копит данные ({lob.lob.first_train_h}ч)"
+            # движок может быть выключен конфигом (реал = только Буря):
+            # тогда его блок в отчёте просто не печатается
+            ml_block = ""
+            if ml5h is not None:
+                ml_model = "готова" if ml5h.model else "ждёт артефакт"
+                ml_block = (f"ML-5ч (USDT): позиций {len(ml5h.pos)}, "
+                            f"день {float(ml5h.day_pnl):+.2f} USDT, "
+                            f"модель {ml_model}\n")
+            lob_block = ""
+            if lob is not None:
+                lob_model = "готова" if lob.model else \
+                    f"копит данные ({lob.lob.first_train_h}ч)"
+                lob_block = (f"Стакан (USDC): позиций {len(lob.pos)}, "
+                             f"день {float(lob.day_pnl):+.2f} USDC, "
+                             f"модель {lob_model}\n")
+            env_tag = "DEMO" if not ml5h.c.dry_run and \
+                ml5h.c.mode != Mode.MAINNET else \
+                ("СУХОЙ РЕЖИМ MAINNET" if ml5h.c.dry_run else "MAINNET")
             tg.fire(
-                f"📊 <b>{now.strftime('%H:%M UTC')} [DEMO]</b>\n"
-                f"ML-5ч (USDT): позиций {ml_open}, день {ml_day:+.2f} USDT, "
-                f"модель {ml_model}\n"
-                f"Стакан (USDC): позиций {lob_open}, день {lob_day:+.2f} "
-                f"USDC, модель {lob_model}")
+                f"📊 <b>{now.strftime('%H:%M UTC')} [{env_tag}]</b>\n"
+                f"{ml_block}{lob_block}")
         except Exception:
             log.exception("hourly report")
 
