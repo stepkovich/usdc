@@ -162,9 +162,19 @@ class Executor:
         d = v if isinstance(v, Decimal) else Decimal(str(v))
         return format(d, "f")
 
+    def _dry(self, what: str) -> bool:
+        """Сухой режим (BOT_DRY_RUN=1): всё настоящее, кроме отправки
+        ордеров — ступень 2 реал-запуска."""
+        if self.cfg.dry_run:
+            log.info("СУХОЙ РЕЖИМ: %s — ордер не отправлен", what)
+            return True
+        return False
+
     def place_entry_limit(self, symbol: str, side: str, price: Decimal,
                           qty: Decimal, client_id: str,
                           post_only: bool = False) -> int | None:
+        if self._dry(f"вход {symbol} {side} @{price} qty={qty}"):
+            return None
         """Входная лимитка. post_only=True -> GTX: биржа ОТКЛОНИТ заявку,
         если она сразу исполнилась бы как тейкер (-4131), — тогда вернём None.
         Так вход гарантированно мейкерский (на USDC-M мейкер = 0 по промо)."""
@@ -195,6 +205,8 @@ class Executor:
     def place_tp_limit(self, symbol: str, side: str, price: Decimal,
                        qty: Decimal, client_id: str,
                        pos_side: str | None = None) -> int | None:
+        if self._dry(f"тейк {symbol} {side} @{price}"):
+            return None
         # -2022: гонка сразу после исполнения входа — ретраим с паузой
         # pos_side = сторона ПОЗИЦИИ (LONG/SHORT), не ордера.
         # В HEDGE: positionSide = сторона позиции (закрываем LONG -> positionSide=LONG)
@@ -242,6 +254,8 @@ class Executor:
 
     def place_stop_market(self, symbol: str, side: str, stop_price: Decimal,
                           client_id: str, qty: Decimal | None = None) -> int | None:
+        if self._dry(f"стоп {symbol} {side} @{stop_price}"):
+            return None
         """STOP_MARKET через условные ордера. closePosition=true когда позиция
         открыта (страховка: закрывает весь объём стороны)."""
         close_pos = qty is None
@@ -284,6 +298,9 @@ class Executor:
     def place_market(self, symbol: str, side: str, qty: Decimal,
                      pos_side: str | None = None,
                      reduce_only: bool = False) -> int | None:
+        if self._dry(f"рынок {symbol} {side} qty={qty} "
+                     f"reduce={reduce_only}"):
+            return None
         for attempt in range(2):
             try:
                 kw = dict(symbol=symbol, side=NewOrderSideEnum[side].value,

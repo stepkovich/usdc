@@ -1,0 +1,58 @@
+реал символов: 927 | демо символов: 742
+
+=== БУРЯ (522 USDT-пары) ===
+нет на реале: 0 []
+не TRADING на реале: 3 ['1000000BOBUSDT', 'PROMPTUSDT', 'PUMPBTCUSDT']
+фильтры РАЗЛИЧАЮТСЯ: 165 пар
+  4USDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ACEUSDT: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.000010', 'step': '0.01', 'minQty': '0.01', 'notional': '5'}
+  ACTUSDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+  AIOTUSDT: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'}
+  AKEUSDT: демо={'tick': '0.0000001', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ALLOUSDT: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ALTUSDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ANKRUSDT: демо={'tick': '0.000010', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.000001', 'step': '1', 'minQty': '1', 'notional': '5'}
+  APRUSDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ARBUSDT: демо={'tick': '0.000100', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} -> реал={'tick': '0.000010', 'step': '0.1', 'minQty': '0.1', 'notional': '5'}
+  ARKUSDT: демо={'tick': '0.0001000', 'step': '3', 'minQty': '3', 'notional': '5'} -> реал={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'}
+  ASRUSDT: демо={'tick': '0.001000', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} -> реал={'tick': '0.000100', 'step': '0.1', 'minQty': '0.1', 'notional': '5'}
+  ATHUSDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+  AUSDT: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'}
+  AVAAIUSDT: демо={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} -> реал={'tick': '0.0000010', 'step': '1', 'minQty': '1', 'notional': '5'}
+
+=== СПРИНТЕР (36 USDC-пар) ===
+  1000BONKUSDC: совпадает (tick 0.0000010, notional 5)
+  1000PEPEUSDC: совпадает (tick 0.0000001, notional 5)
+  1000SHIBUSDC: совпадает (tick 0.0000010, notional 5)
+  AAVEUSDC: совпадает (tick 0.010, notional 5)
+  ADAUSDC: совпадает (tick 0.000100, notional 5)
+  ARBUSDC: демо={'tick': '0.000100', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} статус демо=TRADING -> реал={'tick': '0.000010', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} статус=TRADING
+  AVAXUSDC: совпадает (tick 0.001000, notional 5)
+  BCHUSDC: совпадает (tick 0.01, notional 5)
+  BNBUSDC: совпадает (tick 0.010, notional 5)
+  BOMEUSDC: совпадает (tick 0.0000001, notional 5)
+  BTCUSDC: демо={'tick': '0.1', 'step': '0.001', 'minQty': '0.001', 'notional': '100'} статус демо=TRADING -> реал={'tick': '0.1', 'step': '0.001', 'minQty': '0.001', 'notional': '50'} статус=TRADING
+  CRVUSDC: совпадает (tick 0.0001000, notional 5)
+  DOGEUSDC: совпадает (tick 0.000010, notional 5)
+  ENAUSDC: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} статус демо=TRADING -> реал={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} статус=TRADING
+  ETHFIUSDC: совпадает (tick 0.0001000, notional 5)
+  ETHUSDC: совпадает (tick 0.01, notional 20)
+  FILUSDC: демо={'tick': '0.0010000', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} статус демо=TRADING -> реал={'tick': '0.0001000', 'step': '0.1', 'minQty': '0.1', 'notional': '5'} статус=TRADING
+  HBARUSDC: совпадает (tick 0.0000100, notional 5)
+  KAITOUSDC: совпадает (tick 0.000100, notional 5)
+  LINKUSDC: совпадает (tick 0.001, notional 5)
+  LTCUSDC: совпадает (tick 0.01, notional 5)
+  NEOUSDC: демо={'tick': '0.001', 'step': '0.01', 'minQty': '0.01', 'notional': '5'} статус демо=TRADING -> реал={'tick': '0.001', 'step': '0.001', 'minQty': '0.001', 'notional': '5'} статус=TRADING
+  ORDIUSDC: совпадает (tick 0.001000, notional 5)
+  PENGUUSDC: совпадает (tick 0.0000010, notional 5)
+  PNUTUSDC: совпадает (tick 0.0000100, notional 5)
+  SOLUSDC: совпадает (tick 0.0100, notional 5)
+  SUIUSDC: совпадает (tick 0.000100, notional 5)
+  TIAUSDC: совпадает (tick 0.0001000, notional 5)
+  TRUMPUSDC: совпадает (tick 0.001000, notional 5)
+  UNIUSDC: совпадает (tick 0.0010, notional 5)
+  WIFUSDC: совпадает (tick 0.0001000, notional 5)
+  WLDUSDC: совпадает (tick 0.0001000, notional 5)
+  WLFIUSDC: демо={'tick': '0.0001000', 'step': '1', 'minQty': '1', 'notional': '5'} статус демо=TRADING -> реал={'tick': '0.0000100', 'step': '1', 'minQty': '1', 'notional': '5'} статус=TRADING
+  XRPUSDC: совпадает (tick 0.0001, notional 5)
+  ZECUSDC: совпадает (tick 0.01, notional 5)
