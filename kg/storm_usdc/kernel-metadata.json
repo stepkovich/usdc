@@ -1,0 +1,13 @@
+{
+  "id": "sewerted/usdc-storm-usdc",
+  "title": "usdc-storm-usdc",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": ["sewerted/usdc-models"],
+  "competition_sources": [],
+  "kernel_sources": []
+}

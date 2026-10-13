@@ -103,6 +103,11 @@ class SymState:
 
 STATES = {s: SymState() for s in UNIVERSE}
 
+# СЫРАЯ ЛЕНТА СДЕЛОК: (ts, sym, price, qty, side). Еда для нейросети —
+# ритм торгов, которого нет в агрегатах. maxlen = предохранитель RAM;
+# writer_task сбрасывает буфер в сжатый файл каждые 10 минут.
+TAPE: deque = deque(maxlen=200_000)
+
 
 def _to_dict(model):
     d = model.model_dump(by_alias=True) if hasattr(model, "model_dump") else model
@@ -139,8 +144,10 @@ def make_trade_handler(sym: str):
             ts = int(d.get("T") or d.get("time") or d.get("trade_time") or 0)
             q = float(d.get("q") or d.get("quantity") or 0)
             m = d.get("m", d.get("is_buyer_maker"))
-            if ts and q:
+            p = float(d.get("p") or d.get("price") or 0)
+            if ts and q and p:
                 st.trades.append((ts, q, not bool(m)))
+                TAPE.append((ts, sym, p, q, 1 if not bool(m) else -1))
         except Exception:                      # noqa: BLE001
             pass
     return handler
@@ -251,6 +258,7 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
     last_arch = time.time()
     last_pulse = 0
     last_vacuum_day = None
+    last_tape = time.time()
     while True:
         await asyncio.sleep(0.2)
         try:
@@ -274,6 +282,23 @@ async def writer_task(conn_sql: sqlite3.Connection, arch: Archive) -> None:
                     conn_sql.execute("delete from feat where ts < ?",
                                      (hot_cut,))
                     conn_sql.commit()
+            if time.time() - last_tape >= 600:
+                last_tape = time.time()
+                if TAPE:
+                    chunk = list(TAPE)
+                    TAPE.clear()
+                    key = datetime.fromtimestamp(
+                        chunk[0][0] / 1000,
+                        tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    tmp = PARQUET_DIR / f"tape_{key}.csv.gz.tmp"
+                    out = PARQUET_DIR / f"tape_{key}.csv.gz"
+                    import gzip
+                    with gzip.open(tmp, "wt", compresslevel=6) as f:
+                        f.write("ts,symbol,price,qty,side\n")
+                        for t_, sym_, p_, q_, s_ in chunk:
+                            f.write(f"{t_},{sym_},{p_},{q_},{s_}\n")
+                    os.replace(tmp, out)
+                    log.info("лента: %d сделок -> %s", len(chunk), out.name)
             if time.time() - last_arch >= 60:
                 last_arch = time.time()
                 if buf:
