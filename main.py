@@ -54,9 +54,9 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
                 lob_block = (f"Стакан (USDC): позиций {len(lob.pos)}, "
                              f"день {float(lob.day_pnl):+.2f} USDC, "
                              f"модель {lob_model}\n")
-            env_tag = "DEMO" if not ml5h.c.dry_run and \
-                ml5h.c.mode != Mode.MAINNET else \
-                ("СУХОЙ РЕЖИМ MAINNET" if ml5h.c.dry_run else "MAINNET")
+            env_tag = "DEMO" if not cfg.dry_run and \
+                cfg.mode != Mode.MAINNET else \
+                ("СУХОЙ РЕЖИМ MAINNET" if cfg.dry_run else "MAINNET")
             tg.fire(
                 f"📊 <b>{now.strftime('%H:%M UTC')} [{env_tag}]</b>\n"
                 f"{ml_block}{lob_block}")
