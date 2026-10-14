@@ -65,7 +65,7 @@ class ML5HConfig(BaseModel):
     risk_pct: Decimal = Decimal("0.0015")
     buffer_pct: Decimal = Decimal("0.02")     # оценочный убыток 5ч позиции
     notional_cap_pct: Decimal = Decimal("0.02")
-    max_slots: int = 6
+    max_slots: int = 24             # было 6 — душило штормовые дни (симуляция 14.10)
     entry_ttl_s: int = 60
     exit_ttl_s: int = 90
     leverage: int = 3
@@ -140,6 +140,8 @@ class Config(BaseModel):
         cfg.lob.day_cap_usdc = Decimal(lob_day) if lob_day else Decimal("0")
         cfg.ml5h.enabled = os.environ.get("ML5H_ENABLED", "1") == "1"
         cfg.ml5h.quiet_filter = os.environ.get("ML5H_QUIET_FILTER", "1") == "1"
+        if os.environ.get("ML5H_MAX_SLOTS"):
+            cfg.ml5h.max_slots = int(os.environ["ML5H_MAX_SLOTS"])
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"
         if os.environ.get("ML5H_SYMBOLS"):
             cfg.ml5h.symbols = [s.strip().upper() for s in
