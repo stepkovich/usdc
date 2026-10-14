@@ -293,7 +293,7 @@ class Ml5hEngine:
         #      терцили ATR вселенной −3.2бп на 21.8к сделок, летучая
         #      треть +85.7). Порог = живая 1/3-квантиль atr_pct вселенной
         #      этого бара — каузально и без констант из прошлого.
-        if scored and len(atrs) >= 30:
+        if scored and self.c.quiet_filter and len(atrs) >= 30:
             q33 = float(np.quantile(atrs, 1 / 3))
             before = len(scored)
             scored = [s for s in scored

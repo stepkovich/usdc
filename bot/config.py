@@ -72,6 +72,7 @@ class ML5HConfig(BaseModel):
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (MAE-исследование 28.09)
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
+    quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
 
 
 class LobConfig(BaseModel):
@@ -95,6 +96,7 @@ class LobConfig(BaseModel):
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (флеш-краш защита)
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
+    quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
 
 
 class Config(BaseModel):
@@ -137,6 +139,7 @@ class Config(BaseModel):
         lob_day = os.environ.get("LOB_DAY_CAP_USDC", "")
         cfg.lob.day_cap_usdc = Decimal(lob_day) if lob_day else Decimal("0")
         cfg.ml5h.enabled = os.environ.get("ML5H_ENABLED", "1") == "1"
+        cfg.ml5h.quiet_filter = os.environ.get("ML5H_QUIET_FILTER", "1") == "1"
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"
         if os.environ.get("ML5H_SYMBOLS"):
             cfg.ml5h.symbols = [s.strip().upper() for s in
