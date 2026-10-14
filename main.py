@@ -83,9 +83,11 @@ async def main() -> None:
     timesync.install()
 
     ex = Executor(cfg, filters={})
-    await asyncio.to_thread(ex.ensure_position_mode, False)  # ONE-WAY
+    # сверка часов ДО первого подписанного запроса: на VPS без RTC
+    # и с плавающим NAT подпись с неотмеренным офсетом ловит -1021
     off = await asyncio.to_thread(timesync.measure, ex.client.rest_api)
     log.info("время: офсет %+d мс", off)
+    await asyncio.to_thread(ex.ensure_position_mode, False)  # ONE-WAY
 
     tasks = []
     ml5h: Ml5hEngine | None = None
