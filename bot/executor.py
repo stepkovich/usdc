@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from urllib.parse import urlparse
 import json
 import time
 import logging
@@ -51,6 +53,23 @@ def unwrap(model):
     return inst if inst is not None else model
 
 
+def _proxy_kwargs() -> dict:
+    """EXEC_PROXY=http://user:pass@host:port — весь REST через внешний прокси.
+
+    Нужен, когда исходящий адрес VPS плавает по пулу NAT (белые списки
+    IP у биржи становятся рулеткой) — тогда трафик выходит с адреса
+    прокси, который и вписан в белый список."""
+    raw = os.environ.get("EXEC_PROXY", "")
+    if not raw:
+        return {}
+    u = urlparse(raw)
+    d: dict = {"protocol": u.scheme or "http",
+               "host": u.hostname, "port": u.port or 80}
+    if u.username:
+        d["auth"] = {"username": u.username, "password": u.password or ""}
+    return {"proxy": d}
+
+
 class Executor:
     def __init__(self, cfg, filters: dict[str, SymbolFilters]):
         self.cfg = cfg
@@ -61,7 +80,7 @@ class Executor:
             config_rest_api=ConfigurationRestAPI(
                 api_key=cfg.api_key, api_secret=cfg.api_secret,
                 base_path=cfg.exec_rest_url,
-                timeout=5000, retries=3, backoff=1000))
+                timeout=5000, retries=3, backoff=1000, **_proxy_kwargs()))
         # РЫНОЧНЫЕ данные — всегда мейннет (публичные): свечи и стакан
         # для признаков/решений должны совпадать с обучением на реале.
         # Исполнение (ордера/позиции/баланс) — по режиму (демо).
@@ -69,7 +88,7 @@ class Executor:
             config_rest_api=ConfigurationRestAPI(
                 api_key=cfg.api_key, api_secret=cfg.api_secret,
                 base_path="https://fapi.binance.com",
-                timeout=5000, retries=3, backoff=1000))
+                timeout=5000, retries=3, backoff=1000, **_proxy_kwargs()))
 
     def _run(self, fn, *a, **kw):
         return asyncio.to_thread(fn, *a, **kw)
