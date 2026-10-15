@@ -97,6 +97,18 @@ class Ml5hEngine:
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
                  self.c.gate)
+        self.meta = None
+        self.meta_veto = 0
+        self.meta_pass = 0
+        if self.c.meta_gate:
+            try:
+                self.meta = lgb.Booster(
+                    model_file=str(self.c.meta_model_path))
+                log.info("мета: замок загружен (%s) — вето при p_win<0.5",
+                         self.c.meta_model_path.name)
+            except Exception as e:
+                log.warning("мета: не загрузилась (%s) — торгую без неё",
+                            str(e)[:80])
         # биржа — источник правды: символы, которых нет на демо, отсеиваем
         await asyncio.to_thread(self.ex.build_filters, self.symbols)
         live = [s for s in self.symbols if s in self.ex.filters]
@@ -288,6 +300,20 @@ class Ml5hEngine:
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
             if p > self.c.gate or p < 1 - self.c.gate:
+                if self.meta is not None:
+                    vec = [x.get(f) for f in self.feats] + [p, atr]
+                    vec = [v if v is not None and np.isfinite(v) else 0.0
+                           for v in vec]
+                    try:
+                        pw = float(self.meta.predict(np.array([vec]))[0])
+                    except Exception:
+                        pw = 1.0
+                    if pw < 0.5:
+                        self.meta_veto += 1
+                        log.info("мета: вето %s p=%.3f p_win=%.2f",
+                                 sym, p, pw)
+                        continue
+                    self.meta_pass += 1
                 scored.append([abs(p - 0.5), p, sym, atr])
         # 1.5) фильтр «тихая треть» (рентген 12.10: сделки в нижней
         #      терцили ATR вселенной −3.2бп на 21.8к сделок, летучая
@@ -310,6 +336,9 @@ class Ml5hEngine:
         if scored:
             log.info("бар: кандидатов %d, лучшая уверенность %.3f (%s)",
                      len(scored), scored[0][1], scored[0][2])
+        if self.meta is not None:
+            log.info("мета: счёт принято/вето %d/%d", self.meta_pass,
+                     self.meta_veto)
         slots = len(self.pos) + len(self.pending)
         for conf, p, sym, _atr in scored:
             if slots >= self.c.max_slots:

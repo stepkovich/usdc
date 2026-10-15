@@ -18,15 +18,16 @@ if not os.path.exists(META_PATH):
     raise SystemExit(1)
 META = json.load(open(META_PATH))
 SYMS = META["syms"]
-MONTHS = META["months5y"]
+MONTHS = META.get("months5y") or META.get("months") or []
+EXTRA_DAYS = META.get("extra_days", [])  # дневные пакеты свежих дней
 OUT = "/kaggle/working"
 BASE = "https://data.binance.vision/data/futures/um/monthly/klines/{sym}/30m/{sym}-30m-{month}.zip"
+BASE_D = "https://data.binance.vision/data/futures/um/daily/klines/{sym}/30m/{sym}-30m-{day}.zip"
 
 
 errs = []
 
-def fetch(sym, month):
-    url = BASE.format(sym=sym, month=month)
+def fetch(url):
     try:
         r = urllib.request.urlopen(url, timeout=30)
         return r.read()
@@ -43,8 +44,10 @@ def get_symbol(args):
     (лимит Кегла: 500 файлов в output, у нас 527 CSV)."""
     sym, i, total = args
     rows = []
-    for month in MONTHS:
-        data = fetch(sym, month)
+    urls = [BASE.format(sym=sym, month=m) for m in MONTHS] + \
+           [BASE_D.format(sym=sym, day=d) for d in EXTRA_DAYS]
+    for url in urls:
+        data = fetch(url)
         if not data:
             continue
         z = zipfile.ZipFile(io.BytesIO(data))
