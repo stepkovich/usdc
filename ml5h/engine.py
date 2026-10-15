@@ -189,6 +189,27 @@ class Ml5hEngine:
             except Exception as e:
                 log.warning("перезагрузка модели не удалась: %s", e)
 
+    async def _refresh_day_xchg(self) -> None:
+        """БИРЖА — ИСТОЧНИК ПРАВДЫ (владелец, 15.10): день = ВСЕ потоки
+        с полуночи UTC (сделки + комиссии + фандинг). Кэш 120с; при сбое
+        остаётся прошлое значение, локальный счёт — запасной."""
+        if time.time() - getattr(self, "_day_xchg_ts", 0) < 120:
+            return
+        self._day_xchg_ts = time.time()
+        try:
+            midnight = int(datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+            r = await asyncio.to_thread(
+                self.ex.client.rest_api.get_income_history,
+                start_time=midnight, limit=1000)
+            inst = getattr(r.data(), "actual_instance", r.data())
+            rows_l = inst if isinstance(inst, list) else []
+            s = sum(float(getattr(x, "income", 0) or 0) for x in rows_l)
+            self._day_xchg = Decimal(str(round(s, 6)))
+        except Exception as e:
+            log.warning("день с биржи не получен (%s) — счёт локальный",
+                        str(e)[:60])
+
     async def tick(self) -> None:
         now = datetime.now(timezone.utc)
         self.maybe_reload_model()
@@ -202,6 +223,9 @@ class Ml5hEngine:
         if time.time() - getattr(self, "_last_recon", 0) >= 600:
             self._last_recon = time.time()
             await self.recon()
+        await self._refresh_day_xchg()
+        if self._day_xchg is not None:
+            self.day_pnl = self._day_xchg
         day_cap = (min(self.c.day_cap_usdc, self.balance * self.cfg.daily_cap_pct)
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
@@ -542,7 +566,11 @@ class Ml5hEngine:
             mult = Decimal(1) if pos.get("side", "LONG") == "LONG" \
                 else Decimal(-1)
             pnl = (Decimal(str(exit_px)) - Decimal(str(pos["px"]))) * q * mult
-        self.day_pnl += pnl
+        await self._refresh_day_xchg()
+        if self._day_xchg is not None:
+            self.day_pnl = self._day_xchg
+        else:
+            self.day_pnl += pnl
         try:
             self.tconn.execute(
                 "INSERT INTO trades (ts,symbol,side,entry_px,exit_px,qty,"
