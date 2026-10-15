@@ -300,7 +300,11 @@ class Ml5hEngine:
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
             if p > self.c.gate or p < 1 - self.c.gate:
-                if self.meta is not None:
+                if self.meta is not None and atr is not None \
+                        and np.isfinite(atr):
+                    # мета обучена на сигналах с конечной atr — на свежих
+                    # листингах без истории воздерживается (режет их и так
+                    # фильтр «тихая треть»)
                     vec = [x.get(f) for f in self.feats] + [p, atr]
                     vec = [v if v is not None and np.isfinite(v) else 0.0
                            for v in vec]
