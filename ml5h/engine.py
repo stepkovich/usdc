@@ -480,7 +480,7 @@ class Ml5hEngine:
             px = float((info or {}).get("avgPrice") or 0)
             self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
                              "p": p, "maker_entry": False, "side": "SHORT"}
-            tg.fire(f"🔴 <b>ML5 ВХОД {sym}</b> {qty} @ {px} (taker) p={p:.2f}")
+            tg.fire(f"🔴 <b>ML5 ВХОД {sym} ШОРТ</b> {qty} @ {px} (taker) p={p:.2f}")
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": ba, "p": p,
                              "ts": time.time(), "side": "SHORT"}
@@ -600,8 +600,9 @@ class Ml5hEngine:
         except Exception:
             log.exception("сигнал переобучения")
         self.pos.pop(sym, None)
-        tg.fire(f"{'✅' if pnl > 0 else '🔻'} <b>ML5 ВЫХОД {sym}</b> "
-                f"{pnl:.2f} USDT ({exit_fee})")
+        tg.fire(f"{'✅' if pnl > 0 else '🔻'} <b>ML5 ВЫХОД {sym} "
+                f"{'ШОРТ' if pos.get('side', 'LONG') == 'SHORT' else 'ЛОНГ'}</b> "
+                f"{pnl:+.2f} USDT")
         log.info("ЗАКРЫТО %s @%s pnl=%.3f (день %.2f)", sym, exit_px, pnl,
                  self.day_pnl)
 
@@ -660,8 +661,9 @@ class Ml5hEngine:
                                      "entry_ts": time.time(),
                                      "maker_entry": True}
                     self.pending.pop(sym, None)
-                    tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {pend['qty']} @ {px} "
-                            f"(мейкер) p={pend['p']:.2f}")
+                    tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
+                            f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
+                            f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
                     continue
                 self.pending.pop(sym, None)
                 info = await asyncio.to_thread(self.ex.query_order_full, sym,
@@ -673,8 +675,9 @@ class Ml5hEngine:
                     self.pos[sym] = {"qty": exq, "px": px,
                                      "entry_ts": time.time(),
                                      "maker_entry": True, "partial": True}
-                    tg.fire(f"🟡 <b>ML5 {sym}</b> частичный вход {exq} @ {px} "
-                            f"— веду остаток")
+                    tg.fire(f"🟡 <b>ML5 {sym} "
+                            f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
+                            f"частичный вход {exq} @ {px}")
                     await self.close_any(sym, self.pos[sym], maker=True)
                 else:
                     # цена не дошла до уровня за отведённое время: экзамен
@@ -690,8 +693,9 @@ class Ml5hEngine:
                 self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
                                  "maker_entry": True,
                                  "side": pend.get("side", "LONG")}
-                tg.fire(f"🟢 <b>ML5 ВХОД {sym}</b> {pend['qty']} @ {px} "
-                        f"(мейкер) p={pend['p']:.2f}")
+                tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
+                        f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
+                        f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
         for sym, pos in list(self.pos.items()):
             # АВАРИЙНЫЙ ВЫХОД (предрегистрация 28.09 по MAE-исследованию:
             # глубже -15% ныряют 0.27% сделок, их финал -11.7%, выживают 6%).
@@ -708,7 +712,8 @@ class Ml5hEngine:
                     log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%% (порог %s%%)",
                                 sym, float(loss) * 100,
                                 self.c.emergency_stop_pct * 100)
-                    tg.fire(f"🛑 <b>ML5 АВАРИЙНЫЙ ВЫХОД {sym}</b> "
+                    tg.fire(f"🛑 <b>ML5 АВАРИЙНЫЙ ВЫХОД {sym} "
+                            f"{'ШОРТ' if pos.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"−{float(loss)*100:.1f}%")
                     await self.close_any(sym, pos, maker=False)
                     continue

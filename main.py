@@ -54,12 +54,8 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
                 lob_block = (f"Стакан (USDC): позиций {len(lob.pos)}, "
                              f"день {float(lob.day_pnl):+.2f} USDC, "
                              f"модель {lob_model}\n")
-            env_tag = "DEMO" if not cfg.dry_run and \
-                cfg.mode != Mode.MAINNET else \
-                ("СУХОЙ РЕЖИМ MAINNET" if cfg.dry_run else "MAINNET")
-            tg.fire(
-                f"📊 <b>{now.strftime('%H:%M UTC')} [{env_tag}]</b>\n"
-                f"{ml_block}{lob_block}")
+            log.info("часовой отчёт: %s",
+                     (ml_block + lob_block).replace("\n", " | "))
         except Exception:
             log.exception("hourly report")
 
@@ -79,7 +75,6 @@ async def main() -> None:
     if cfg.telegram_token and cfg.telegram_chat_id:
         tg.init(cfg.telegram_token, cfg.telegram_chat_id,
                 env=cfg.mode.value)
-        tg.fire("🤖 Единая система запущена: ML-5ч + стакан. Демо.")
     timesync.install()
 
     ex = Executor(cfg, filters={})
