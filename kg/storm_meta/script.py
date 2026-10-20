@@ -239,6 +239,16 @@ if acc_all:
     print(f"ИТОГ (фолды 2..8): принятые {a_acc:+.2f}бп против всех "
           f"{a_all:+.2f}бп (Δ{a_acc-a_all:+.2f}), n={n_acc_pool} -> "
           f"{'КАНДИДАТ' if cand else 'НЕТ'}", flush=True)
+# МЕТА-МОДЕЛЬ ВСЕГДА СОХРАНЯЕТСЯ: последняя обученная (на всей OOS-истории
+# до последнего фолда) — это и есть свежая мета для деплоя. Вердикт
+# «кандидат/нет» оценивает ПОЛЬЗУ замка, а не необходимость обновления.
+try:
+    meta.booster_.save_model("/kaggle/working/meta.txt")
+    print(f"meta.txt сохранён: обучена на {len(hist)} сигналах истории",
+          flush=True)
+except NameError:
+    print("мета не обучалась ни на одном фолде — сохранять нечего",
+          flush=True)
 json.dump(report, open("/kaggle/working/report.json", "w"), indent=1,
           ensure_ascii=False)
 print("МЕТА-ПОДТВЕРЖДЕНИЕ ЗАВЕРШЕНО", flush=True)
