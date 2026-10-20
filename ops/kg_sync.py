@@ -216,8 +216,10 @@ def _main() -> None:
                        f"на сервере ({r.get('plus_days')}/{r.get('n_test')} "
                        "плюс-дней)")
                 else:
+                    _pd = (r.get("A") or {}).get("plus_days", r.get("plus_days"))
+                    _nt = (r.get("A") or {}).get("n_test", r.get("n_test"))
                     reason = r.get("reason") or (
-                        "плюс-дней %s из %s" % (r.get("plus_days"), r.get("n_test")))
+                        "плюс-дней %s из %s" % (_pd, _nt))
                     tg("🧠⚠️ Стакан: критерии не взяты (" + reason +
                        ") — работаем на старой модели")
     # ---------- 3. Wide ML5H: панель готова? -> пуш wide ----------
