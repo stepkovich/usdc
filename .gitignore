@@ -10,3 +10,7 @@ trend.py
 data_cache_30m/
 lob_archive/
 *.parquet
+ops/judge/klines/
+ops/judge/metrics/
+*.db-wal
+*.db-shm
