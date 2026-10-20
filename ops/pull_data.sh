@@ -6,7 +6,8 @@ set -e
 # один запуск за раз: параллельный (cron + вручную) молча пропускает
 exec 9>/tmp/pull_data.lock
 flock -n 9 || { echo "pull_data уже идёт — пропуск"; exit 0; }
-VPS=root@159.65.133.26
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9252"
+VPS="root@159.65.133.26"
 DEST=/home/iek/lob_archive
 mkdir -p "$DEST/ml5h"
 # *.tmp исключаем: рекордер пишет часовой файл через tmp и переименовывает —

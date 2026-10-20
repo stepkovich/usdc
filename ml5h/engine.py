@@ -679,6 +679,28 @@ class Ml5hEngine:
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"частичный вход {exq} @ {px}")
                     await self.close_any(sym, self.pos[sym], maker=True)
+                elif self.c.taker_fallback:
+                    # демо-режим: на демо-бирже нет ликвидности под
+                    # мейкер-заявки — берём по рынку, чтобы экзамен
+                    # продолжал собирать статистику сделок
+                    side = "SELL" if pend.get("side") == "SHORT" else "BUY"
+                    oid = await asyncio.to_thread(
+                        self.ex.place_market, sym, side,
+                        Decimal(str(pend["qty"])))
+                    if oid is not None:
+                        info = await asyncio.to_thread(
+                            self.ex.query_order_full, sym, oid)
+                        px = float((info or {}).get("avgPrice")
+                                   or pend["px"])
+                        self.pos[sym] = {**pend, "px": px,
+                                         "entry_ts": time.time(),
+                                         "maker_entry": False}
+                        self.pending.pop(sym, None)
+                        tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
+                                f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
+                                f"{pend['qty']} @ {px} (рынок)")
+                        log.info("%s: TTL истёк — вход по рынку (фолбэк)",
+                                 sym)
                 else:
                     # цена не дошла до уровня за отведённое время: экзамен
                     # считал мейкерский вход по уровню — погоню тейкером
