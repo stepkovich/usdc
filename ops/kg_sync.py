@@ -220,8 +220,19 @@ def _main() -> None:
                     _nt = (r.get("A") or {}).get("n_test", r.get("n_test"))
                     reason = r.get("reason") or (
                         "плюс-дней %s из %s" % (_pd, _nt))
-                    tg("🧠⚠️ Стакан: критерии не взяты (" + reason +
-                       ") — работаем на старой модели")
+                    # ТГ-тревога ОДИН РАЗ на эпизод неудачи (иначе — спам
+                    # каждый час; повторный успех сбрасывает состояние)
+                    st_f = Path("/root/kg/.lob_fail_state")
+                    sig = reason[:100]
+                    prev = st_f.read_text().strip() if st_f.exists() else ""
+                    if sig != prev:
+                        st_f.parent.mkdir(parents=True, exist_ok=True)
+                        st_f.write_text(sig)
+                        tg("🧠⚠️ Стакан: критерии не взяты (" + reason +
+                           ") — работаем на старой модели")
+                    else:
+                        print("стакан: критерии по-прежнему не взяты "
+                              "(уже оповещали)", flush=True)
     # ---------- 3. Wide ML5H: панель готова? -> пуш wide ----------
     if not (FLAGS / "panel_done").exists():
         st = kernel_status("usdc-panel-downloader")
