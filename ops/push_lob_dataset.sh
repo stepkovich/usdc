@@ -13,7 +13,7 @@ rsync -az --quiet /home/iek/lob_archive/feat_*.parquet "$STAGE/" 2>/dev/null || 
 rsync -az --quiet /home/iek/lob_archive/tape_*.csv.gz "$STAGE/" 2>/dev/null || true
 tar czf "$STAGE/tapes_latest.tar.gz" -C /home/iek/lob_archive $(cd /home/iek/lob_archive && ls tape_*.csv.gz) 2>/dev/null
 find "$STAGE" -name "tape_*.csv.gz" -delete 2>/dev/null
-find "$STAGE" -name "tapes_*.tar.gz" ! -name "tapes_$(date +%Y%m%d).tar.gz" -delete 2>/dev/null
+find "$STAGE" -name "tapes_*.tar.gz" ! -name "tapes_latest.tar.gz" -delete 2>/dev/null
 find "$STAGE" -name "feat_*.parquet" -mtime +30 -delete 2>/dev/null
 find "$STAGE" -name "*.tmp" -delete 2>/dev/null
 cd "$STAGE"
