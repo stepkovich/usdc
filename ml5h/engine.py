@@ -196,6 +196,8 @@ class Ml5hEngine:
         if time.time() - getattr(self, "_day_xchg_ts", 0) < 120:
             return
         self._day_xchg_ts = time.time()
+        if not hasattr(self, "_day_xchg"):
+            self._day_xchg = None
         try:
             midnight = int(datetime.now(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)

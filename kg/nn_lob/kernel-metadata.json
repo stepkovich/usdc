@@ -7,7 +7,9 @@
   "is_private": "true",
   "enable_gpu": "true",
   "enable_internet": "false",
-  "dataset_sources": ["sewerted/usdc-lob-features"],
+  "dataset_sources": [
+    "sewerted/usdc-lob-features-v2"
+  ],
   "competition_sources": [],
   "kernel_sources": []
 }
