@@ -228,6 +228,17 @@ class Ml5hEngine:
         await self._refresh_day_xchg()
         if self._day_xchg is not None:
             self.day_pnl = self._day_xchg
+        # баланс == 0 (старт при бане/сбое) — перечитываем раз в 120с,
+        # иначе дневной кап от нулевого баланса ложно душит торговлю
+        if self.balance <= 0 and time.time() - getattr(
+                self, "_last_bal_try", 0) >= 120:
+            self._last_bal_try = time.time()
+            try:
+                self.balance = await asyncio.to_thread(
+                    self.ex.account_wallet_balance, "USDT")
+                log.info("баланс перечитан: %s USDT", self.balance)
+            except Exception as e:
+                log.warning("баланс не читается (%s)", str(e)[:60])
         day_cap = (min(self.c.day_cap_usdc, self.balance * self.cfg.daily_cap_pct)
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
