@@ -206,7 +206,10 @@ class Ml5hEngine:
                 start_time=midnight, limit=1000)
             inst = getattr(r.data(), "actual_instance", r.data())
             rows_l = inst if isinstance(inst, list) else []
-            s = sum(float(getattr(x, "income", 0) or 0) for x in rows_l)
+            # день = торговля (сделки+комиссии+фандинг); переводы —
+            # движение денег, не заработок, иначе пополнение картинка дня
+            s = sum(float(getattr(x, "income", 0) or 0) for x in rows_l
+                    if getattr(x, "income_type", "") != "TRANSFER")
             self._day_xchg = Decimal(str(round(s, 6)))
         except Exception as e:
             log.warning("день с биржи не получен (%s) — счёт локальный",
