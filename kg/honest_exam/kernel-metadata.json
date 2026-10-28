@@ -1,0 +1,19 @@
+{
+  "id": "sewerted/usdc-frozen-vs-loop",
+  "title": "usdc-frozen-vs-loop",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
+  "dataset_sources": [
+    "sewerted/usdc-frozen-models"
+  ],
+  "kernel_sources": [
+    "sewerted/usdc-panel-downloader"
+  ],
+  "competition_sources": [],
+  "model_sources": [],
+  "machine_shape": "NvidiaTeslaT4"
+}

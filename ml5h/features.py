@@ -48,7 +48,12 @@ def make_features(df: pd.DataFrame, btc_close, symbol: str) -> pd.DataFrame:
         btc = btc_close.reindex(df.index).ffill()
         out["btc_ret_10"] = btc.pct_change(10)
         out["btc_ret_20"] = btc.pct_change(20)
-        out["btc_corr"] = close.rolling(50, min_periods=20).corr(btc)
+        # ПАРИТЕТ С ОБУЧЕНИЕМ (фикс 28.10): учебник ml5h_wide считает
+        # btc_corr по ДОХОДНОСТЯМ (rets vs bret), а не по ценам.
+        # Корреляция уровней цен ~константа у всех монет - на ней модель
+        # в бою выдавала внеучебные уверенности 0.73+ (см. usdc-frozen-vs-loop).
+        bret = btc.pct_change()
+        out["btc_corr"] = rets.rolling(50, min_periods=20).corr(bret)
     # 24ч импульс прямо на 30м барах: 48 баров x 30мин = 24ч — тот же
     # смысл, что 6 x 4h, но БЕЗ утечки будущего (старый resample-вариант
     # давал бару 08:00 цену 11:30 — корзина накрывала 4 часа вперёд).
