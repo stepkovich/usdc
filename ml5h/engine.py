@@ -624,8 +624,10 @@ class Ml5hEngine:
 
     async def recon(self) -> None:
         """Биржа — источник правды: раз в 10 минут сверяем позиции.
-        Чужая (после рестарта) — усыновляем и немедленно закрываем;
-        наша, которой на бирже нет — фиксируем внешнее закрытие."""
+        Своя (метка ml5- на входном ордере) — усыновляем с настоящим
+        временем входа и доезжаем до будильника; чужая (ручная) —
+        усыновляем и немедленно закрываем; наша, которой на бирже
+        нет — фиксируем внешнее закрытие."""
         try:
             rows = await asyncio.to_thread(
                 self.ex.position_information_for, self.symbols)
@@ -639,8 +641,23 @@ class Ml5hEngine:
                 continue
             amt = Decimal(str(d.get("positionAmt", "0")))
             qty = abs(amt)
-            log.warning("%s: позиция без состояния (%s) — усыновляю и "
-                        "закрываю", sym, d.get("entryPrice"))
+            # чья позиция? наш вход помечен ml5- в clientOrderId биржи.
+            # Своя -> усыновляем с НАСТОЯЩИМ временем входа и доезжаем
+            # до будильника (кромка в недосиженном хвосте). Чужая
+            # (ручная) -> закрываем немедленно, как раньше.
+            own = await asyncio.to_thread(self.ex.own_entry_for,
+                                          sym, float(amt))
+            if own:
+                mins = int((time.time() - own["ts"]) / 60)
+                log.warning("%s: своя позиция после рестарта (вход %d мин "
+                            "назад) — доезжаю до будильника", sym, mins)
+                self.pos[sym] = {"qty": qty,
+                                 "px": own["px"] or float(d.get("entryPrice", 0)),
+                                 "entry_ts": own["ts"], "adopted": True,
+                                 "side": "LONG" if amt > 0 else "SHORT"}
+                continue
+            log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
+                        sym, d.get("entryPrice"))
             self.pos[sym] = {"qty": qty, "px": float(d.get("entryPrice", 0)),
                              "entry_ts": 0, "adopted": True,
                              "side": "LONG" if amt > 0 else "SHORT"}

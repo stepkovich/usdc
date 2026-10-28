@@ -342,6 +342,33 @@ class Executor:
                 return None
         return None
 
+    def own_entry_for(self, symbol: str, amt: float) -> dict | None:
+        """Последний НАШ вход (метка ml5-, не ml5x-) за 6 часов.
+        Возвращает {"ts": сек, "px": цена} или None — тогда позиция чужая."""
+        try:
+            r = self.client.rest_api.all_orders(symbol=symbol, limit=10)
+            rows = r.data()
+            rows = getattr(rows, "actual_instance", rows)
+        except Exception:
+            return None
+        want = "BUY" if amt > 0 else "SELL"
+        best = None
+        for o in rows:
+            coid = str(getattr(o, "client_order_id", "") or "")
+            if not coid.startswith("ml5-") or coid.startswith("ml5x-"):
+                continue
+            if str(getattr(o, "status", "")) != "FILLED":
+                continue
+            if str(getattr(o, "side", "")) != want:
+                continue
+            ts = float(getattr(o, "update_time", 0) or 0)
+            if ts <= 0 or time.time() - ts / 1000 > 6 * 3600:
+                continue
+            if best is None or ts > best["ts"]:
+                best = {"ts": ts / 1000.0,
+                        "px": float(getattr(o, "avg_price", 0) or 0)}
+        return best
+
     def query_order_full(self, symbol: str, order_id: int) -> dict | None:
         for _ in range(3):
             try:
