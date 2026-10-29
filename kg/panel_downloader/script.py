@@ -10,12 +10,14 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-META_PATH = "/kaggle/input/usdc-panel-meta/panel_meta.json"
-if not os.path.exists(META_PATH):
-    print("input-дерево:", flush=True)
-    for root, dirs, fs in os.walk("/kaggle/input"):
-        print(" ", root, len(fs), flush=True)
-    raise SystemExit(1)
+# Кегль менял пути подключения (то /kaggle/input/<имя>, то
+# /kaggle/input/datasets/<юзер>/<имя>) — ищем файл по всему дереву
+META_PATH = None
+for root, _d, fs in os.walk("/kaggle/input"):
+    if "panel_meta.json" in fs:
+        META_PATH = os.path.join(root, "panel_meta.json")
+        break
+assert META_PATH, "panel_meta.json не найден"
 META = json.load(open(META_PATH))
 SYMS = META["syms"]
 MONTHS = META.get("months5y") or META.get("months") or []

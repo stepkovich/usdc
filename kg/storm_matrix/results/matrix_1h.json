@@ -1,0 +1,245 @@
+{
+ "tf": "1h",
+ "hours": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  12
+ ],
+ "test_quarters": [
+  "2020Q2",
+  "2021Q2",
+  "2022Q2",
+  "2023Q2",
+  "2024Q1",
+  "2025Q1",
+  "2026Q1",
+  "2027Q1"
+ ],
+ "gate": 0.65,
+ "costs_bp": 12,
+ "stop": 0.15,
+ "train_step": 1,
+ "summary": {
+  "raw": {
+   "1": {
+    "n": 48668,
+    "avg_bp": -31.43,
+    "win_pct": 43.4,
+    "stop_pct": 0.6,
+    "plus_q": "0/6",
+    "long_bp": -31.1,
+    "short_bp": -32.0
+   },
+   "2": {
+    "n": 48645,
+    "avg_bp": -22.65,
+    "win_pct": 47.4,
+    "stop_pct": 1.2,
+    "plus_q": "0/6",
+    "long_bp": -21.4,
+    "short_bp": -25.1
+   },
+   "3": {
+    "n": 48633,
+    "avg_bp": -17.42,
+    "win_pct": 48.7,
+    "stop_pct": 1.8,
+    "plus_q": "0/6",
+    "long_bp": -18.1,
+    "short_bp": -16.2
+   },
+   "4": {
+    "n": 48620,
+    "avg_bp": -13.68,
+    "win_pct": 49.9,
+    "stop_pct": 2.5,
+    "plus_q": "0/6",
+    "long_bp": -16.2,
+    "short_bp": -8.9
+   },
+   "5": {
+    "n": 48606,
+    "avg_bp": -7.37,
+    "win_pct": 51.0,
+    "stop_pct": 3.1,
+    "plus_q": "2/6",
+    "long_bp": -9.3,
+    "short_bp": -3.6
+   },
+   "6": {
+    "n": 48586,
+    "avg_bp": -8.0,
+    "win_pct": 51.9,
+    "stop_pct": 3.8,
+    "plus_q": "3/6",
+    "long_bp": -11.5,
+    "short_bp": -1.3
+   },
+   "7": {
+    "n": 48564,
+    "avg_bp": -3.07,
+    "win_pct": 52.3,
+    "stop_pct": 4.4,
+    "plus_q": "2/6",
+    "long_bp": -6.3,
+    "short_bp": 3.0
+   },
+   "8": {
+    "n": 48542,
+    "avg_bp": 2.45,
+    "win_pct": 52.7,
+    "stop_pct": 4.9,
+    "plus_q": "3/6",
+    "long_bp": -1.3,
+    "short_bp": 9.5
+   },
+   "9": {
+    "n": 48520,
+    "avg_bp": 4.98,
+    "win_pct": 52.6,
+    "stop_pct": 5.5,
+    "plus_q": "3/6",
+    "long_bp": 0.2,
+    "short_bp": 14.0
+   },
+   "10": {
+    "n": 48506,
+    "avg_bp": 5.26,
+    "win_pct": 52.6,
+    "stop_pct": 6.2,
+    "plus_q": "4/6",
+    "long_bp": 0.1,
+    "short_bp": 15.1
+   },
+   "12": {
+    "n": 48462,
+    "avg_bp": 6.37,
+    "win_pct": 52.2,
+    "stop_pct": 7.4,
+    "plus_q": "3/6",
+    "long_bp": -2.7,
+    "short_bp": 23.6
+   }
+  },
+  "meta": {
+   "1": {
+    "n": 5754,
+    "avg_bp": -52.05,
+    "win_pct": 43.1,
+    "stop_pct": null,
+    "plus_q": "0/5",
+    "long_bp": -57.8,
+    "short_bp": -41.2,
+    "kept_pct": 15.3
+   },
+   "2": {
+    "n": 13064,
+    "avg_bp": -28.44,
+    "win_pct": 48.1,
+    "stop_pct": null,
+    "plus_q": "0/5",
+    "long_bp": -30.4,
+    "short_bp": -25.4,
+    "kept_pct": 34.8
+   },
+   "3": {
+    "n": 17647,
+    "avg_bp": -14.58,
+    "win_pct": 49.5,
+    "stop_pct": null,
+    "plus_q": "1/5",
+    "long_bp": -7.1,
+    "short_bp": -28.2,
+    "kept_pct": 47.0
+   },
+   "4": {
+    "n": 21087,
+    "avg_bp": -11.76,
+    "win_pct": 50.6,
+    "stop_pct": null,
+    "plus_q": "1/5",
+    "long_bp": -8.4,
+    "short_bp": -16.7,
+    "kept_pct": 56.2
+   },
+   "5": {
+    "n": 24213,
+    "avg_bp": -9.32,
+    "win_pct": 51.5,
+    "stop_pct": null,
+    "plus_q": "1/5",
+    "long_bp": -7.5,
+    "short_bp": -12.2,
+    "kept_pct": 64.6
+   },
+   "6": {
+    "n": 25172,
+    "avg_bp": -16.27,
+    "win_pct": 51.7,
+    "stop_pct": null,
+    "plus_q": "1/5",
+    "long_bp": -15.5,
+    "short_bp": -17.5,
+    "kept_pct": 67.2
+   },
+   "7": {
+    "n": 25825,
+    "avg_bp": -14.95,
+    "win_pct": 52.4,
+    "stop_pct": null,
+    "plus_q": "1/5",
+    "long_bp": -17.2,
+    "short_bp": -11.6,
+    "kept_pct": 68.9
+   },
+   "8": {
+    "n": 26155,
+    "avg_bp": -4.06,
+    "win_pct": 53.5,
+    "stop_pct": null,
+    "plus_q": "3/5",
+    "long_bp": -6.1,
+    "short_bp": -0.8,
+    "kept_pct": 69.8
+   },
+   "9": {
+    "n": 26073,
+    "avg_bp": -4.82,
+    "win_pct": 53.1,
+    "stop_pct": null,
+    "plus_q": "3/5",
+    "long_bp": -8.4,
+    "short_bp": 0.4,
+    "kept_pct": 69.6
+   },
+   "10": {
+    "n": 25599,
+    "avg_bp": -1.5,
+    "win_pct": 53.4,
+    "stop_pct": null,
+    "plus_q": "3/5",
+    "long_bp": -8.8,
+    "short_bp": 9.8,
+    "kept_pct": 68.3
+   },
+   "12": {
+    "n": 25828,
+    "avg_bp": -1.48,
+    "win_pct": 52.7,
+    "stop_pct": null,
+    "plus_q": "3/5",
+    "long_bp": -15.9,
+    "short_bp": 20.7,
+    "kept_pct": 69.0
+   }
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "id": "sewerted/usdc-storm-m15",
+ "title": "usdc-storm-m15",
+ "code_file": "script.py",
+ "language": "python",
+ "kernel_type": "script",
+ "is_private": "true",
+ "enable_gpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": [],
+ "competition_sources": [],
+ "kernel_sources": [
+  "sewerted/usdc-panel-downloader-5m"
+ ],
+ "model_sources": []
+}

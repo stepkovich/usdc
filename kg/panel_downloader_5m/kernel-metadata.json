@@ -1,0 +1,16 @@
+{
+  "id": "sewerted/usdc-panel-downloader-5m",
+  "title": "usdc-panel-downloader-5m",
+  "code_file": "script.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_internet": true,
+  "dataset_sources": [
+    "sewerted/usdc-panel-meta"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
