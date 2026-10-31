@@ -615,12 +615,45 @@ class Ml5hEngine:
                                 f"переобучение")
         except Exception:
             log.exception("сигнал переобучения")
+        # БИРЖЕВЫЕ ЧИСЛА СДЕЛКИ (владелец 31.10: в ТГ — как в приложении
+        # биржи). income-записи закрытия доезжают с задержкой — коротко
+        # ждём; не доехало — показываем расчёт по ценам, как раньше.
+        entry_ms = int(float(pos.get("entry_ts") or 0) * 1000) - 2000
+        net = None
+        day_add = None
+        if entry_ms > 0:
+            midnight = int(datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0,
+                microsecond=0).timestamp() * 1000)
+            for _ in range(4):
+                rows = await asyncio.to_thread(self.ex.income_rows,
+                                               sym, entry_ms)
+                if not any(r["type"] == "REALIZED_PNL" for r in rows):
+                    await asyncio.sleep(1.5)
+                    continue
+                await asyncio.sleep(1.0)   # комиссия выхода доезжает следом
+                rows = await asyncio.to_thread(self.ex.income_rows,
+                                               sym, entry_ms)
+                net = sum((Decimal(r["income"]) for r in rows
+                           if r["type"] in ("REALIZED_PNL", "COMMISSION")),
+                          Decimal(0))
+                # вклад сделки в СЕГОДНЯшний день (позиция могла быть
+                # открыта вчера — её вчерашние потоки в день не добавляем)
+                day_add = sum((Decimal(r["income"]) for r in rows
+                               if r["type"] != "TRANSFER"
+                               and r["time"] >= midnight), Decimal(0))
+                break
         self.pos.pop(sym, None)
         tg.fire(f"{'✅' if pnl > 0 else '🔻'} <b>ML5 ВЫХОД {sym} "
                 f"{'ШОРТ' if pos.get('side', 'LONG') == 'SHORT' else 'ЛОНГ'}</b> "
-                f"{pnl:+.2f} USDT")
+                f"{pnl:+.2f} USDT"
+                + (f" (чистыми {net:+.2f})" if net is not None else ""))
+        # день в момент закрытия: биржевой снимок брался ДО записи этой
+        # сделки — добавляем её вклад сами (биржа запишет то же число)
+        day_disp = self.day_pnl + (day_add if day_add is not None else pnl) \
+            if self._day_xchg is not None else self.day_pnl
         log.info("ЗАКРЫТО %s @%s pnl=%.3f (день %.2f)", sym, exit_px, pnl,
-                 self.day_pnl)
+                 day_disp)
 
     async def recon(self) -> None:
         """Биржа — источник правды: раз в 10 минут сверяем позиции.

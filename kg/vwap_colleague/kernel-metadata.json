@@ -1,0 +1,14 @@
+{
+ "id": "sewerted/usdc-vwap-colleague",
+ "title": "usdc-vwap-colleague",
+ "code_file": "script.py",
+ "language": "python",
+ "kernel_type": "script",
+ "is_private": "true",
+ "enable_gpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": ["sewerted/usdc-funding"],
+ "competition_sources": [],
+ "kernel_sources": ["sewerted/usdc-panel-downloader-5m"],
+ "model_sources": []
+}

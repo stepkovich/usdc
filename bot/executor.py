@@ -427,6 +427,26 @@ class Executor:
             log.warning("%s: реализованный PnL не получен: %s", symbol, e)
             return None
 
+    def income_rows(self, symbol: str, since_ms: int) -> list[dict]:
+        """Сырые потоки по символу с момента since_ms (все типы). []
+        если биржа не ответила — не фантазируем."""
+        try:
+            r = self.client.rest_api.get_income_history(
+                symbol=symbol, start_time=since_ms, limit=1000).data()
+            rows = getattr(r, "root", None) or r
+            out = []
+            for e in rows:
+                d = e.model_dump(by_alias=True) \
+                    if hasattr(e, "model_dump") else e
+                out.append({"type": d.get("incomeType", ""),
+                            "income": d.get("income", "0"),
+                            "time": int(d.get("time", 0))})
+            return out
+        except Exception as e:
+            log.warning("%s: потоки сделки не получены: %s",
+                        symbol, str(e)[:60])
+            return []
+
     def order_book_top(self, symbol: str) -> tuple[float, float] | None:
         try:
             r = self.market_client.rest_api.order_book(symbol=symbol, limit=5).data()
