@@ -384,10 +384,23 @@ class Ml5hEngine:
             log.info("мета: счёт принято/вето %d/%d", self.meta_pass,
                      self.meta_veto)
         slots = len(self.pos) + len(self.pending)
+        # СТОЛ САМ ПОДСТРАИВАЕТСЯ ПОД ДЕНЬГИ (владелец 02.11): слотов не
+        # больше, чем свободной маржи хватает по марже одной позиции.
+        # При полном столе / просадке — сам сжимается, при пополнении —
+        # сам раздвигается до max_slots. Отказов биржи по марже нет.
+        avail = await asyncio.to_thread(self.ex.available_balance, "USDT")
+        margin_one = self.notional(scored[0][2]) \
+            / Decimal(self.c.leverage) if scored else Decimal(0)
+        slot_cap = self.c.max_slots
+        if margin_one > 0 and avail < margin_one:
+            slot_cap = min(self.c.max_slots,
+                           int(avail // margin_one))
+            if slot_cap < slots:
+                slot_cap = slots     # уже открытое не считаем лишним
         for conf, p, sym, _atr in scored:
-            if slots >= self.c.max_slots:
-                log.info("очередь: %s p=%.3f — слотов нет, ждёт следующего бара",
-                         sym, p)
+            if slots >= slot_cap:
+                log.info("очередь: %s p=%.3f — слотов нет (%d/%d, своб. маржа %s) — "
+                         "ждёт следующего бара", sym, p, slots, slot_cap, avail)
                 continue
             try:
                 if p > self.c.gate:
@@ -421,6 +434,20 @@ class Ml5hEngine:
         if not fl or px <= 0:
             return Decimal(0)
         return fl.qty_for_notional(self.notional(sym), px) or Decimal(0)
+
+    async def slot_cap(self) -> int:
+        """Текущий потолок стола: max_slots, урезанный свободной маржей
+        (та же логика, что в on_bar — для отчётов)."""
+        avail = await asyncio.to_thread(self.ex.available_balance, "USDT")
+        try:
+            margin_one = self.notional(next(iter(self.bars))) \
+                / Decimal(self.c.leverage)
+        except Exception:
+            return self.c.max_slots
+        if margin_one <= 0 or avail >= margin_one * self.c.max_slots:
+            return self.c.max_slots
+        cap = int(avail // margin_one)
+        return max(cap, len(self.pos) + len(self.pending), 0)
 
     async def open_long(self, sym: str, p: float) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)

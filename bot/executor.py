@@ -578,3 +578,16 @@ class Executor:
             if d.get("asset") == asset:
                 return Decimal(str(d.get("balance", d.get("availableBalance", "0"))))
         return Decimal("0")
+
+    def available_balance(self, asset: str = "USDT") -> Decimal:
+        """Свободная маржа (баланс мин занятое открытыми позициями) —
+        для лимита слотов: не заказывать у биржи больше, чем есть."""
+        bal = unwrap(self.client.rest_api.futures_account_balance_v3().data())
+
+        def rows(x):
+            return getattr(x, "root", None) or x
+        for a in rows(bal):
+            d = a.model_dump(by_alias=True) if hasattr(a, "model_dump") else a
+            if d.get("asset") == asset:
+                return Decimal(str(d.get("availableBalance", "0")))
+        return Decimal("0")

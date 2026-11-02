@@ -45,7 +45,14 @@ async def hourly_report(cfg: Config, ml5h: Ml5hEngine, lob: LobBot) -> None:
             ml_block = ""
             if ml5h is not None:
                 ml_model = "готова" if ml5h.model else "ждёт артефакт"
-                ml_block = (f"ML-5ч (USDT): позиций {len(ml5h.pos)}, "
+                try:
+                    avail = await asyncio.to_thread(
+                        ml5h.ex.available_balance, "USDT")
+                    cap = await ml5h.slot_cap()
+                    free_note = f", стол {len(ml5h.pos)+len(ml5h.pending)}/{cap}"
+                except Exception:
+                    free_note = ""
+                ml_block = (f"ML-5ч (USDT): позиций {len(ml5h.pos)}{free_note}, "
                             f"день {float(ml5h.day_pnl):+.2f} USDT, "
                             f"модель {ml_model}\n")
             lob_block = ""
