@@ -1,4 +1,5 @@
-"""Двигатель ML-5Ч: топ-20 USDT, сигнал каждые 30 минут, холд 5 часов.
+"""Двигатель ML-5Ч: все живые USDT-перпетуалы (~515), сигнал каждые
+30 минут, холд 5 часов.
 
 Каждые 30 минут (закрытие бара) пересчитываем признаки по всей истории
 в памяти и спрашиваем модель. p > gate -> LONG: вход post-only по биду
@@ -115,7 +116,7 @@ class Ml5hEngine:
         live = [s for s in self.symbols if s in self.ex.filters]
         for s in self.symbols:
             if s not in live:
-                log.warning("%s: нет на демо-бирже — исключён", s)
+                log.warning("%s: нет на бирже (делистнута) — исключён", s)
         self.symbols = live
         await asyncio.to_thread(self.ex.verify_and_set_leverage, self.symbols)
         for s in self.symbols:
@@ -224,8 +225,6 @@ class Ml5hEngine:
             self.day_pnl = Decimal(0)
             self.balance = await asyncio.to_thread(
                 self.ex.account_wallet_balance, "USDT")
-        if now.date() != self.day_key or True:
-            pass
         if time.time() - getattr(self, "_last_recon", 0) >= 600:
             self._last_recon = time.time()
             await self.recon()

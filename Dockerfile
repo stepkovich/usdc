@@ -12,7 +12,6 @@ COPY bot/ ./bot/
 COPY ml5h/ ./ml5h/
 COPY lob/ ./lob/
 COPY main.py .
-COPY models/ ./models/
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
