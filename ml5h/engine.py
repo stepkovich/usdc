@@ -435,6 +435,34 @@ class Ml5hEngine:
             return Decimal(0)
         return fl.qty_for_notional(self.notional(sym), px) or Decimal(0)
 
+    async def place_stop(self, sym: str, pos: dict) -> None:
+        """БИРЖЕВОЙ СТОП (владелец 02.11): защита позиции живёт на бирже,
+        а не в нашем polling. STOP_MARKET closePosition по порогу -15%
+        от входа (тот же, что у прежней ботовой полиции); сработает
+        миллисекундно и переживёт падение бота. Цена триггера — к тику
+        монеты, в сторону срабатывания (чуть раньше — консервативно)."""
+        try:
+            px = Decimal(str(pos["px"]))
+            short = pos.get("side") == "SHORT"
+            stop_px = px * (1 + self.c.emergency_stop_pct if short
+                            else 1 - self.c.emergency_stop_pct)
+            fl = self.ex.filters.get(sym)
+            if fl is not None:
+                stop_px = fl.round_price(stop_px)
+            oid = await asyncio.to_thread(
+                self.ex.place_stop_market, sym,
+                "BUY" if short else "SELL", stop_px,
+                f"ml5s-{sym}-{int(time.time())}")
+            if oid is not None:
+                pos["sl_oid"] = oid
+                pos["sl_px"] = float(stop_px)
+                log.info("%s: биржевой стоп @%s (id=%s)", sym, stop_px, oid)
+            else:
+                log.warning("%s: биржевой стоп НЕ выставлен — "
+                            "попробую на следующем цикле", sym)
+        except Exception:
+            log.exception("%s: ошибка установки биржевого стопа", sym)
+
     async def slot_cap(self) -> int:
         """Текущий потолок стола: max_slots, урезанный свободной маржей
         (та же логика, что в on_bar — для отчётов)."""
@@ -573,10 +601,15 @@ class Ml5hEngine:
                     pos_side="LONG" if self.ex.hedge_mode else None)
             except BinanceError as e:
                 if api_code(e) == -2022:
-                    # позиции на бирже уже нет (закрыта вне цикла/ранее)
-                    log.warning("%s: -2022 при выходе — позиция уже закрыта, "
-                                "снимаю с учёта", sym)
-                    self.pos.pop(sym, None)
+                    # позиции на бирже уже нет (вероятно, биржевым стопом)
+                    log.warning("%s: -2022 при выходе — позиция уже закрыта",
+                                sym)
+                    since_ms = int(max(pos.get("entry_ts", 0),
+                                       time.time() - 6 * 3600) * 1000)
+                    pnl_ex = await asyncio.to_thread(
+                        self.ex.realized_pnl_since, sym, since_ms)
+                    await self.finish(sym, pos, 0.0, "external",
+                                      exchange_pnl=pnl_ex)
                     return
                 raise
             if oid is not None:
@@ -595,6 +628,12 @@ class Ml5hEngine:
         """Биржа — источник правды: нулевая цена выхода запрещена. Если
         цена не восстановима (закрытие вне бота), в журнал и дневной счёт
         идёт реализованный PnL с биржи."""
+        if pos.get("sl_oid"):
+            # обычный выход: биржевой стоп больше не нужен (иначе останется
+            # сиротой и перевернёт будущую позицию по этой монете)
+            await asyncio.to_thread(self.ex.cancel_algo_order,
+                                    sym, pos["sl_oid"])
+            pos.pop("sl_oid", None)
         if exit_px <= 0 and exchange_pnl is not None:
             pnl = Decimal(str(exchange_pnl))
             exit_fee = "external_birzha"
@@ -714,6 +753,7 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
+                await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
                         sym, d.get("entryPrice"))
@@ -723,6 +763,10 @@ class Ml5hEngine:
         for sym in list(self.pos):
             if sym not in live:
                 pos = self.pos[sym]
+                if pos.get("sl_oid"):
+                    tg.fire(f"🛑 <b>ML5 СТОП {sym}</b> сработал на бирже "
+                            f"без бота @ {pos.get('sl_px')}")
+                    pos.pop("sl_oid", None)
                 log.warning("%s: закрыта вне бота — результат беру с биржи",
                             sym)
                 info = (await asyncio.to_thread(self.ex.query_order_full,
@@ -753,6 +797,7 @@ class Ml5hEngine:
                                      "entry_ts": time.time(),
                                      "maker_entry": True}
                     self.pending.pop(sym, None)
+                    await self.place_stop(sym, self.pos[sym])
                     tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
@@ -807,30 +852,19 @@ class Ml5hEngine:
                 self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
                                  "maker_entry": True,
                                  "side": pend.get("side", "LONG")}
+                await self.place_stop(sym, self.pos[sym])
                 tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
                         f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                         f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
         for sym, pos in list(self.pos.items()):
-            # АВАРИЙНЫЙ ВЫХОД (предрегистрация 28.09 по MAE-исследованию:
-            # глубже -15% ныряют 0.27% сделок, их финал -11.7%, выживают 6%).
-            # Закрываем по рынку, поверх остаётся биржевая ликвидация.
-            top = await asyncio.to_thread(self.ex.order_book_top, sym)
-            if top:
-                bid, ba = top
-                px0 = Decimal(str(pos["px"]))
-                if pos.get("side") == "SHORT":
-                    loss = (Decimal(str(ba)) - px0) / px0
-                else:
-                    loss = (px0 - Decimal(str(bid))) / px0
-                if loss >= self.c.emergency_stop_pct:
-                    log.warning("%s: АВАРИЙНЫЙ ВЫХОД -%.1f%% (порог %s%%)",
-                                sym, float(loss) * 100,
-                                self.c.emergency_stop_pct * 100)
-                    tg.fire(f"🛑 <b>ML5 АВАРИЙНЫЙ ВЫХОД {sym} "
-                            f"{'ШОРТ' if pos.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
-                            f"−{float(loss)*100:.1f}%")
-                    await self.close_any(sym, pos, maker=False)
-                    continue
+            # АВАРИЙНАЯ ЗАЩИТА = БИРЖЕВОЙ СТОП (предрегистрация 28.09 по
+            # MAE-исследованию: глубже -15% ныряют 0.27% сделок; владелец
+            # 02.11: переносим её НА БИРЖУ — STOP_MARKET ставится при
+            # входе/усиновлении и срабатывает без нашего сервера).
+            # Здесь только гарантия наличия: не выставился при входе —
+            # пробуем на каждом цикле, пока не стоит.
+            if "sl_oid" not in pos:
+                await self.place_stop(sym, pos)
             if "exit_oid" in pos:
                 if time.time() > pos["exit_deadline"]:
                     await asyncio.to_thread(self.ex.cancel_order, sym,
