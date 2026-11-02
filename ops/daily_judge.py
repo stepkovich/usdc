@@ -43,7 +43,7 @@ KCACHE = JDIR / "klines"
 JDIR.mkdir(exist_ok=True, parents=True)
 PANEL = ROOT / "data_cache_30m"
 PANEL_FROM = date(2026, 9, 27)          # кеш панели кончается ~28.09
-NEED_BARS = 1200                        # 25 дней: запас для всех окон
+NEED_BARS = 1500                        # 31 день: запас для окон + оборот 30д
 
 META = json.load(open(ROOT / "models" / "ml5h_meta.json"))
 FEATS = list(META["features"])
@@ -199,16 +199,20 @@ def oi_feats(sym, ot, cap_day):
     return out
 
 def signals_and_rows(day: date):
-    """(сигналы дня, {open_time: q33}, кадры признаков для исходов)."""
+    """(сигналы дня, {open_time: q33}, {sym: оборот за 30д до дня})."""
     D0 = int(datetime(day.year, day.month, day.day,
                       tzinfo=timezone.utc).timestamp() * 1000)
     D1 = int(datetime(day.year, day.month, day.day,
                       tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
     rows = []          # (sym, ot, p, atr, close, feats_ok)
+    vol30 = {}         # оборот монеты за 30 дней ДО дня — флажок топ-100
     for sym in SYMS:
         df = load_sym(sym)
         if df is None:
             continue
+        w = (df["open_time"].values >= D0 - 30 * 86400_000) \
+            & (df["open_time"].values < D0)
+        vol30[sym] = float(df.loc[w, "quote_volume"].sum())
         X = make_features(df, None if sym == "BTCUSDT"
                           else load_sym_btc, sym)
         X = X.replace([np.inf, -np.inf], np.nan)
@@ -244,7 +248,7 @@ def signals_and_rows(day: date):
             by_bar.setdefault(ot, []).append(atr)
     q33 = {ot: float(np.quantile(v, 1 / 3)) for ot, v in by_bar.items()
            if len(v) >= 30}
-    return rows, q33
+    return rows, q33, vol30
 
 load_sym_btc = None
 
@@ -259,7 +263,14 @@ def main():
     global load_sym_btc
     btc = load_sym("BTCUSDT")
     load_sym_btc = btc["close"] if btc is not None else None
-    rows, q33 = signals_and_rows(D)
+    rows, q33, vol30 = signals_and_rows(D)
+    # флажок «топ-100 по обороту» (владелец 02.11): оборот за 30д ДО дня —
+    # без подглядывания; список дня сохраняется для аудита
+    top100 = set(sorted(vol30, key=vol30.get, reverse=True)[:100])
+    tdir = JDIR / "top100"
+    tdir.mkdir(exist_ok=True)
+    (tdir / f"{D}.json").write_text(json.dumps(
+        sorted(top100), indent=0))
     # cooldown 10 баров на символ, как в бою
     rows.sort(key=lambda r: r[1])
     last_sig = {}
@@ -273,6 +284,7 @@ def main():
             s = {"sym": sym, "ot": ot, "side": side,
                  "p": round(p, 4), "atr": atr,
                  "in_filter": bool(in_f), "day": str(D),
+                 "top100": sym in top100,
                  "vec": [round(float(x), 6) for x in vec]}
             if meta_model is not None:
                 pw = float(meta_model.predict(np.array([vec]))[0])
@@ -394,6 +406,23 @@ def main():
                 both_txt = (f"  мета+фильтр: n={len(both)} "
                             f"{both.pnl_bp.mean():+.1f}бп")
                 plain_sides.append(both_txt)
+        top_lines = []
+        if "top100" in df.columns:
+            t1 = df[df["top100"] == True]   # noqa: E712
+            t0_ = df[df["top100"] == False]  # noqa: E712
+            if len(t1) and len(t0_):
+                d_top = t1.pnl_bp.mean() - t0_.pnl_bp.mean()
+                v_top = verd(d_top, 5)
+                plain.append(f" | топ-100 {len(t1)}: "
+                             f"{t1.pnl_bp.mean():+.1f}бп")
+                top_lines = ["",
+                             "🏪 <b>Топ-100 по обороту</b> (идея владельца "
+                             "02.11, замер обещал +3.4бп):",
+                             f"• из топ-100: {len(t1)} → "
+                             f"<b>{t1.pnl_bp.mean():+.1f} бп</b>",
+                             f"• вне топ-100: {len(t0_)} → "
+                             f"{t0_.pnl_bp.mean():+.1f} бп",
+                             f"• вердикт: {v_top}"]
         fuel_lines = []
         if "fuel" in df.columns:
             lf = df[(df["side"] == 1) & (df["fuel"] == True)]  # noqa: E712
@@ -419,6 +448,7 @@ def main():
         print("\n".join(plain + plain_sides), flush=True)
         html += meta_lines
         html += ["", "🧭 <b>Стороны</b>:"] + sides
+        html += top_lines
         html += fuel_lines
         (JDIR / "summary.txt").write_text("\n".join(html) + "\n")
 

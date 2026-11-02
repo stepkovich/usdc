@@ -1,5 +1,5 @@
 {
- "trained_at": "2026-10-28T05:51:17.788191+00:00",
+ "trained_at": "2026-11-01T07:29:13.825026+00:00",
  "features": [
   "ret_1",
   "ret_4",
@@ -554,7 +554,7 @@
  "hold_bars": 10,
  "bar_minutes": 30,
  "label": "storm_05atr_both_sides",
- "train_rows": 17439434,
+ "train_rows": 17440575,
  "universe": "wide",
  "verdict": true
 }
