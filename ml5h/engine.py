@@ -4,7 +4,8 @@
 в памяти и спрашиваем модель. p > gate -> LONG: вход post-only по биду
 (TTL), не взяли — маркет (сигнал «купить сейчас»). Выход мейкером
 за минуту до горизонта, фолбэк маркетом.
-Сайзинг от потери: notional = min(2% баланса, риск 0.15% / буфер 2%).
+Сайзинг (владелец 02.11): notional = 10% баланса, но не ниже
+мин-ордера монеты × 1.1; слоты 12; дневной кап 4% баланса.
 Дневной кап 0.5% баланса. Decimal + тик/шаг биржи.
 """
 from __future__ import annotations
@@ -402,18 +403,15 @@ class Ml5hEngine:
                 continue
 
     # ---------- сделки ----------
-    def risk_budget(self) -> Decimal:
-        """Гибрид: денежный риск (если задан) с процентным потолком.
-        Демо-репетиция реала-100: риск 0.10 → позиции ~5 USDC."""
-        base = self.balance * self.c.risk_pct
-        if self.c.risk_usdc > 0:
-            return min(self.c.risk_usdc, base)
+    def notional(self, sym: str) -> Decimal:
+        """Сайзинг владельца (02.11): номинал = 10% баланса, но никогда
+        не ниже мин-ордера ЭТОЙ монеты × 1.1. Растёт вместе с балансом;
+        пол 5 USDT старого кода заменён честным полом от биржи."""
+        base = self.balance * self.c.notional_pct
+        fl = self.ex.filters.get(sym)
+        if fl is not None:
+            base = max(base, fl.min_notional * self.c.min_notional_buffer)
         return base
-
-    def notional(self) -> Decimal:
-        by_risk = self.risk_budget() / self.c.buffer_pct
-        by_cap = self.balance * self.c.notional_cap_pct
-        return max(min(by_risk, by_cap), Decimal("5"))   # пол = минимум биржи
 
     def qty_for(self, sym: str, px: Decimal) -> Decimal:
         """qty_for_notional принимает НОТИОНАЛ в USDT и сам делит на цену
@@ -421,7 +419,7 @@ class Ml5hEngine:
         fl = self.ex.filters.get(sym)
         if not fl or px <= 0:
             return Decimal(0)
-        return fl.qty_for_notional(self.notional(), px) or Decimal(0)
+        return fl.qty_for_notional(self.notional(sym), px) or Decimal(0)
 
     async def open_long(self, sym: str, p: float) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)

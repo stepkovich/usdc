@@ -62,9 +62,11 @@ class ML5HConfig(BaseModel):
     hold_bars: int = 10              # 10 x 30м = 5 часов
     bar_minutes: int = 30
     warmup_bars: int = 1000          # 30м-баров истории на старте
-    risk_pct: Decimal = Decimal("0.0015")
-    buffer_pct: Decimal = Decimal("0.02")     # оценочный убыток 5ч позиции
-    notional_cap_pct: Decimal = Decimal("0.02")
+    risk_pct: Decimal = Decimal("0.0015")          # (не используется — см. notional_pct)
+    buffer_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)
+    notional_cap_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)
+    notional_pct: Decimal = Decimal("0.10")   # сайзинг владельца 02.11: номинал = 10% баланса
+    min_notional_buffer: Decimal = Decimal("1.1")  # но не ниже мин-ордер монеты × 1.1
     max_slots: int = 24             # было 6 — душило штормовые дни (симуляция 14.10)
     entry_ttl_s: int = 60
     exit_ttl_s: int = 90
@@ -117,7 +119,7 @@ class Config(BaseModel):
     ml5h: ML5HConfig = ML5HConfig()
     lob: LobConfig = LobConfig()
 
-    daily_cap_pct: Decimal = Decimal("0.005")   # на двигатель, доля баланса
+    daily_cap_pct: Decimal = Decimal("0.04")   # дневной кап 4% баланса (02.11: ~2 стопа/день)
 
     @property
     def exec_rest_url(self) -> str:
