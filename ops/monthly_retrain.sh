@@ -63,4 +63,18 @@ if [ -f /tmp/meta_cyc/meta.txt ]; then
 else
   notify "⚠️ Мета: файл не получен — работает предыдущая"
 fi
+# --- 5. СИНК МОДЕЛЕЙ В РЕПО (бой = репо, без ручной памяти) ---
+cd /home/iek/PycharmProjects/USDC
+if git status --porcelain models/ | grep -q .; then
+  git add models/
+  git -c user.name=iek -c user.email=iek@local \
+      commit -q -m "месячное переобучение $(date -u +%F): модели в репо"
+  git bundle create /tmp/usdc_models.bundle main
+  scp -q /tmp/usdc_models.bundle root@159.65.133.26:/tmp/
+  ssh root@159.65.133.26 'cd ~/usdc && git pull -q /tmp/usdc_models.bundle main && git push -q origin main; git reflog expire --expire=now --all; git gc --prune=now --quiet; rm -f /tmp/usdc_models.bundle' >/dev/null 2>&1 \
+    && notify "📦 Модели синкнуты в репозитарий" \
+    || notify "⚠️ Синк моделей в репо не прошёл — повторить вручную"
+  rm -f /tmp/usdc_models.bundle
+fi
+
 notify "🏁 МЕСЯЧНЫЙ ЦИКЛ ЗАВЕРШЁН"
