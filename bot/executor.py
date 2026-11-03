@@ -520,6 +520,25 @@ class Executor:
             log.warning("cancel_algo %s id=%s: %s", symbol, algo_id, e)
             return False
 
+    def find_own_stop(self, symbol: str) -> int | None:
+        """Ищет НАШ живой стоп (метка ml5s-) по монете. После рестарта
+        бот не помнит его номер — усыновляем с биржи, а не ставим второй
+        (иначе -4130 спам: closePosition-стоп в направлении уже есть)."""
+        try:
+            r = self.client.rest_api.current_all_algo_open_orders(
+                symbol=symbol).data()
+            rows = getattr(r, "root", None) or r
+            for o in rows:
+                d = o.model_dump(by_alias=True) \
+                    if hasattr(o, "model_dump") else o
+                cid = str(d.get("clientAlgoId", ""))
+                if cid.startswith("ml5s-"):
+                    oid = d.get("algoId") or d.get("orderId")
+                    return int(oid) if oid is not None else None
+        except Exception as e:
+            log.warning("поиск своего стопа %s: %s", symbol, str(e)[:60])
+        return None
+
     def stop_executed(self, algo_id: int) -> bool | None:
         """Исполнился ли биржевой стоп (владелец 03.11: различать «стоп
         сработал» и «позицию закрыли вручную»). True = статус FINISHED/

@@ -442,6 +442,13 @@ class Ml5hEngine:
         миллисекундно и переживёт падение бота. Цена триггера — к тику
         монеты, в сторону срабатывания (чуть раньше — консервативно)."""
         try:
+            # после рестарта наш стоп мог выжить на бирже — усыновляем его
+            existing = await asyncio.to_thread(self.ex.find_own_stop, sym)
+            if existing is not None:
+                pos["sl_oid"] = existing
+                log.info("%s: усыновляю существующий биржевой стоп (id=%s)",
+                         sym, existing)
+                return
             px = Decimal(str(pos["px"]))
             short = pos.get("side") == "SHORT"
             stop_px = px * (1 + self.c.emergency_stop_pct if short
@@ -460,8 +467,21 @@ class Ml5hEngine:
             else:
                 log.warning("%s: биржевой стоп НЕ выставлен — "
                             "попробую на следующем цикле", sym)
-        except Exception:
-            log.exception("%s: ошибка установки биржевого стопа", sym)
+        except Exception as e:
+            from bot.executor import api_code
+            if api_code(e) == -4130:
+                # "closePosition-стоп в этом направлении уже стоит" — наш
+                # или чужой: усыновить, дальше просто следить
+                existing = await asyncio.to_thread(self.ex.find_own_stop, sym)
+                if existing is not None:
+                    pos["sl_oid"] = existing
+                    log.info("%s: -4130 -> усыновляю стоп id=%s",
+                             sym, existing)
+                else:
+                    log.warning("%s: -4130 чужой closePosition-стоп — "
+                                "мой не поставлен, повторю позже", sym)
+            else:
+                log.exception("%s: ошибка установки биржевого стопа", sym)
 
     async def slot_cap(self) -> int:
         """Текущий потолок стола: max_slots, урезанный свободной маржей
