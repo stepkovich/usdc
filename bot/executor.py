@@ -520,6 +520,21 @@ class Executor:
             log.warning("cancel_algo %s id=%s: %s", symbol, algo_id, e)
             return False
 
+    def stop_executed(self, algo_id: int) -> bool | None:
+        """Исполнился ли биржевой стоп (владелец 03.11: различать «стоп
+        сработал» и «позицию закрыли вручную»). True = статус FINISHED/
+        EXECUTED (или actualQty > 0); False = ещё активен/отменён;
+        None = биржа не ответила (не фантазируем)."""
+        try:
+            r = self.client.rest_api.query_algo_order(algo_id=algo_id).data()
+            d = r.model_dump(by_alias=True) if hasattr(r, "model_dump") else {}
+            status = str(d.get("algoStatus", "")).upper()
+            filled = float(d.get("actualQty") or 0) > 0
+            return filled or status in ("FINISHED", "EXECUTED", "FILLED")
+        except Exception as e:
+            log.warning("query_algo %s: %s", algo_id, str(e)[:80])
+            return None
+
     # ---------- дневной PnL по направлениям (биржа = источник правды) ----------
     def daily_directional_pnl(self, start_ms: int) -> dict:
         """Авторитетный дневной PnL по направлениям: income history (окно) +

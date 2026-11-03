@@ -763,10 +763,22 @@ class Ml5hEngine:
         for sym in list(self.pos):
             if sym not in live:
                 pos = self.pos[sym]
+                # различаем честно (владелец 03.11): стоп исполнился или
+                # позицию закрыл кто-то другой (владелец вручную / его ТП)
                 if pos.get("sl_oid"):
-                    tg.fire(f"🛑 <b>ML5 СТОП {sym}</b> сработал на бирже "
-                            f"без бота @ {pos.get('sl_px')}")
-                    pos.pop("sl_oid", None)
+                    done = await asyncio.to_thread(
+                        self.ex.stop_executed, pos["sl_oid"])
+                    if done is False:
+                        tg.fire(f"✋ <b>ML5 {sym}</b> позиция закрыта "
+                                f"вручную — снимаю биржевой стоп")
+                        await asyncio.to_thread(
+                            self.ex.cancel_algo_order, sym, pos["sl_oid"])
+                        pos.pop("sl_oid", None)
+                    elif done is True:
+                        tg.fire(f"🛑 <b>ML5 СТОП {sym}</b> сработал на бирже "
+                                f"без бота @ {pos.get('sl_px')}")
+                        pos.pop("sl_oid", None)
+                    # done is None: биржа не ответила — стоп снимет finish
                 log.warning("%s: закрыта вне бота — результат беру с биржи",
                             sym)
                 info = (await asyncio.to_thread(self.ex.query_order_full,
