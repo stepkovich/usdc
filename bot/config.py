@@ -71,7 +71,7 @@ class ML5HConfig(BaseModel):
     max_slots: int = 10             # v3: 10 × маржа 5% баланса = ровно 50% пула
     entry_ttl_s: int = 60
     exit_ttl_s: int = 90
-    leverage: int = 6
+    leverage: int = 3
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (MAE-исследование 28.09)
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
@@ -98,7 +98,7 @@ class LobConfig(BaseModel):
     max_slots: int = 3
     entry_ttl_s: int = 60
     exit_ttl_s: int = 45
-    leverage: int = 6
+    leverage: int = 3
     emergency_stop_pct: Decimal = Decimal("0.15")  # аварийный выход (флеш-краш защита)
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
