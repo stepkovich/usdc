@@ -118,6 +118,18 @@ class Ml5hEngine:
             if s not in live:
                 log.warning("%s: нет на бирже (делистнута) — исключён", s)
         self.symbols = live
+        # вселенная владельца (04.11): топ-200 по объёму + возраст >180д
+        self._universe = None
+        if self.c.universe_top > 0:
+            self._universe = await asyncio.to_thread(
+                self.ex.top_universe, self.c.universe_top,
+                self.c.universe_min_age_days,
+                tuple(self.c.universe_exclude))
+            before = len(self.symbols)
+            self.symbols = [s for s in self.symbols if s in self._universe]
+            log.info("вселенная: %d/%d монет (топ-%d, возраст>%dд)",
+                     len(self.symbols), before, self.c.universe_top,
+                     self.c.universe_min_age_days)
         await asyncio.to_thread(self.ex.verify_and_set_leverage, self.symbols)
         for s in self.symbols:
             await asyncio.to_thread(self.ex.setup_symbol, s)
@@ -177,6 +189,9 @@ class Ml5hEngine:
                 new_syms = [s for s in (self.c.symbols or meta["symbols"])
                             if s not in self.symbols]
                 self.symbols = self.c.symbols or meta["symbols"]
+                if getattr(self, "_universe", None) is not None:
+                    self.symbols = [s for s in self.symbols
+                                    if s in self._universe]
                 self._model_loaded_mtime = mt
                 import bot.telegram as tg
                 tg.fire(f"🧠 <b>ML-5ч</b>: новая модель получена "
@@ -222,6 +237,22 @@ class Ml5hEngine:
         self.maybe_reload_model()
         if now.date() != self.day_key:
             self.day_key = now.date()
+            if getattr(self, "_universe", None) is not None \
+                    and self.c.universe_top > 0:
+                try:
+                    self._universe = await asyncio.to_thread(
+                        self.ex.top_universe, self.c.universe_top,
+                        self.c.universe_min_age_days,
+                        tuple(self.c.universe_exclude))
+                    kept = [s for s in self.symbols if s in self._universe]
+                    dropped = len(self.symbols) - len(kept)
+                    if dropped:
+                        self.symbols = kept
+                        log.info("вселенная обновлена за сутки: -%d монет",
+                                 dropped)
+                except Exception as e:
+                    log.warning("вселенная за сутки не обновилась: %s",
+                                str(e)[:60])
             self.day_pnl = Decimal(0)
             self.balance = await asyncio.to_thread(
                 self.ex.account_wallet_balance, "USDT")

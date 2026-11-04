@@ -480,13 +480,47 @@ class Executor:
         info = self.client.rest_api.exchange_information().data()
         d = info.model_dump(by_alias=True)
         from bot.markets import parse_filters
+        if not hasattr(self, "onboard_date"):
+            self.onboard_date = {}
         for s in d.get("symbols", []):
             if s.get("symbol") in symbols and s.get("status") == "TRADING":
+                if s.get("onboardDate") is not None:
+                    self.onboard_date[s["symbol"]] = int(s["onboardDate"])
                 try:
                     self.filters[s["symbol"]] = parse_filters(s["symbol"],
                                                               s["filters"])
                 except Exception as e:
                     log.warning("фильтры %s: %s", s["symbol"], e)
+
+    def top_universe(self, top_n: int = 200, min_age_days: int = 180,
+                     exclude: tuple = ("BTCUSDT", "ETHUSDT")) -> set:
+        """Вселенная владельца (04.11): топ-N по объёму за сутки (публичный
+        тикер, один вызов на все символы) + монета старше min_age_days
+        (onboardDate из exchangeInfo) минус исключения. Рейтинг объёма —
+        прокси 30-дневного из бэктеста (ранги сильно коррелируют)."""
+        import urllib.request
+        raw = urllib.request.urlopen(
+            "https://fapi.binance.com/fapi/v1/ticker/24hr",
+            timeout=15).read()
+        now_ms = int(time.time() * 1000)
+        min_age_ms = max(0, min_age_days) * 86_400_000
+        vol = []
+        for d in json.loads(raw):
+            s = d.get("symbol")
+            if s not in self.filters or s in set(exclude):
+                continue
+            ob = getattr(self, "onboard_date", {}).get(s)
+            if ob is not None and now_ms - ob < min_age_ms:
+                continue
+            try:
+                vol.append((float(d.get("quoteVolume") or 0), s))
+            except (TypeError, ValueError):
+                continue
+        vol.sort(reverse=True)
+        uni = {s for _q, s in vol[:max(0, top_n)]}
+        log.info("вселенная: топ-%d по объёму + возраст>%dд = %d монет",
+                 top_n, min_age_days, len(uni))
+        return uni
 
     def cancel_order(self, symbol: str, order_id: int) -> bool:
         try:

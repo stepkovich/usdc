@@ -65,6 +65,9 @@ class ML5HConfig(BaseModel):
     risk_pct: Decimal = Decimal("0.0015")          # (не используется — см. notional_pct)
     buffer_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)
     notional_cap_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)
+    universe_top: int = 200                        # вселенная владельца 04.11
+    universe_min_age_days: int = 180               # монеты старше 180 дней
+    universe_exclude: list[str] = ["BTCUSDT", "ETHUSDT"]
     notional_pct: Decimal = Decimal("0.10")   # доля от ПЛЕЧЕВОЙ ЁМКОСТИ пула (v3 02.11)
     margin_pool_pct: Decimal = Decimal("0.5") # пул = половина баланса
     min_notional_buffer: Decimal = Decimal("1.1")  # пол = мин-ордер монеты × 1.1
@@ -155,6 +158,11 @@ class Config(BaseModel):
             cfg.ml5h.taker_fallback = os.environ["ML5H_TAKER_FALLBACK"] == "1"
         if os.environ.get("ML5H_MAX_SLOTS"):
             cfg.ml5h.max_slots = int(os.environ["ML5H_MAX_SLOTS"])
+        if os.environ.get("ML5H_UNIVERSE_TOP"):
+            cfg.ml5h.universe_top = int(os.environ["ML5H_UNIVERSE_TOP"])
+        if os.environ.get("ML5H_UNIVERSE_AGE"):
+            cfg.ml5h.universe_min_age_days = int(
+                os.environ["ML5H_UNIVERSE_AGE"])
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"
         if os.environ.get("ML5H_SYMBOLS"):
             cfg.ml5h.symbols = [s.strip().upper() for s in

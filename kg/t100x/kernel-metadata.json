@@ -1,0 +1,14 @@
+{
+ "id": "sewerted/usdc-t100x",
+ "title": "usdc-t100x",
+ "code_file": "script.py",
+ "language": "python",
+ "kernel_type": "script",
+ "is_private": "true",
+ "enable_gpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": [],
+ "competition_sources": [],
+ "kernel_sources": ["sewerted/usdc-panel-downloader"],
+ "model_sources": []
+}
