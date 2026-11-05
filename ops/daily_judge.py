@@ -50,7 +50,8 @@ FEATS = list(META["features"])
 GATE = float(META.get("gate", 0.65))
 SYMS = [s for s in META["symbols"] if s != "BTCUSDT"] + ["BTCUSDT"]
 model = lgb.Booster(model_file=str(ROOT / "models" / "ml5h.txt"))
-META_PATH = JDIR / "meta.txt"
+# мета судьи = БОЕВАЯ мета (в репо, синк после каждого переобучения)
+META_PATH = ROOT / "models" / "meta.txt"
 meta_model = None
 if META_PATH.exists():
     meta_model = lgb.Booster(model_file=str(META_PATH))
@@ -379,7 +380,7 @@ def main():
                 f"• вердикт: {v_filt}"]
         meta_lines = []
         if "meta_ok" in df.columns:
-            mo = df[df["meta_ok"]]
+            mo = df[df["meta_ok"] == True]   # noqa: E712 (NaN-устойчиво)
             avg_mo = mo.pnl_bp.mean() if len(mo) else float("nan")
             d_meta = avg_mo - avg_all
             v_meta = verd(d_meta, 5)
@@ -401,7 +402,7 @@ def main():
                              f"<b>{d2.pnl_bp.mean():+.1f} бп</b>")
         both_txt = ""
         if "meta_ok" in df.columns:
-            both = df[df["meta_ok"] & df["in_filter"]]
+            both = df[(df["meta_ok"] == True) & df["in_filter"]]  # noqa: E712
             if len(both):
                 both_txt = (f"  мета+фильтр: n={len(both)} "
                             f"{both.pnl_bp.mean():+.1f}бп")
