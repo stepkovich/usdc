@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import json
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 from decimal import ROUND_DOWN, ROUND_UP
@@ -506,32 +507,27 @@ class Executor:
 
     def top_universe(self, top_n: int = 200, min_age_days: int = 180,
                      exclude: tuple = ("BTCUSDT", "ETHUSDT")) -> set:
-        """Вселенная владельца (04.11): топ-N по объёму за сутки (публичный
-        тикер, один вызов на все символы) + монета старше min_age_days
-        (onboardDate из exchangeInfo) минус исключения. Рейтинг объёма —
-        прокси 30-дневного из бэктеста (ранги сильно коррелируют)."""
-        import urllib.request
-        raw = urllib.request.urlopen(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr",
-            timeout=15).read()
+        """Вселенная владельца (04.11, честная схема): топ-N по обороту за
+        скользящие 30 дней (дневные свечи, как мерил бэктест) + монета
+        старше min_age_days (onboardDate из exchangeInfo) минус
+        исключения. Ранг — по 30-дневному обороту, окно едет с календарём."""
         now_ms = int(time.time() * 1000)
         min_age_ms = max(0, min_age_days) * 86_400_000
+        cands = [s for s in self.filters
+                 if s not in set(exclude)
+                 and (getattr(self, "onboard_date", {}).get(s, 10**12) == 10**12
+                      or now_ms - self.onboard_date[s] >= min_age_ms)]
+        log.info("вселенная: кандидатов с возрастом >%dд: %d",
+                 min_age_days, len(cands))
         vol = []
-        for d in json.loads(raw):
-            s = d.get("symbol")
-            if s not in self.filters or s in set(exclude):
-                continue
-            ob = getattr(self, "onboard_date", {}).get(s)
-            if ob is not None and now_ms - ob < min_age_ms:
-                continue
-            try:
-                vol.append((float(d.get("quoteVolume") or 0), s))
-            except (TypeError, ValueError):
-                continue
+        with ThreadPoolExecutor(16) as pool:
+            for s, v in pool.map(self.daily_volume_30d, cands):
+                if v >= 0:
+                    vol.append((v, s))
         vol.sort(reverse=True)
-        uni = {s for _q, s in vol[:max(0, top_n)]}
-        log.info("вселенная: топ-%d по объёму + возраст>%dд = %d монет",
-                 top_n, min_age_days, len(uni))
+        uni = {s for _v, s in vol[:max(0, top_n)]}
+        log.info("вселенная: топ-%d по 30д-обороту = %d монет",
+                 top_n, len(uni))
         return uni
 
     def cancel_order(self, symbol: str, order_id: int) -> bool:
