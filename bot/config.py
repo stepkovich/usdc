@@ -61,7 +61,7 @@ class ML5HConfig(BaseModel):
     gate: float = 0.55               # заморожено на этапе исследования
     hold_bars: int = 10              # 10 x 30м = 5 часов
     bar_minutes: int = 30
-    warmup_bars: int = 1000          # 30м-баров истории на старте
+    warmup_bars: int = 1500          # ~31 день 30м-баров (объём 30д из своих баров)
     risk_pct: Decimal = Decimal("0.0015")          # (не используется — см. notional_pct)
     buffer_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)
     notional_cap_pct: Decimal = Decimal("0.02")     # (не используется — см. notional_pct)

@@ -492,6 +492,18 @@ class Executor:
                 except Exception as e:
                     log.warning("фильтры %s: %s", s["symbol"], e)
 
+    def daily_volume_30d(self, symbol: str) -> float:
+        """Объём монеты за последние 30 дней: один запрос дневных свечей."""
+        try:
+            raw = urllib.request.urlopen(
+                "https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=1d&limit=30"
+                % symbol, timeout=15).read()
+            rows = json.loads(raw)
+            return sum(float(r[7]) for r in rows if len(r) > 7)
+        except Exception as e:
+            log.warning("30д объём %s: %s", symbol, str(e)[:60])
+            return -1.0
+
     def top_universe(self, top_n: int = 200, min_age_days: int = 180,
                      exclude: tuple = ("BTCUSDT", "ETHUSDT")) -> set:
         """Вселенная владельца (04.11): топ-N по объёму за сутки (публичный

@@ -240,16 +240,7 @@ class Ml5hEngine:
             if getattr(self, "_universe", None) is not None \
                     and self.c.universe_top > 0:
                 try:
-                    self._universe = await asyncio.to_thread(
-                        self.ex.top_universe, self.c.universe_top,
-                        self.c.universe_min_age_days,
-                        tuple(self.c.universe_exclude))
-                    kept = [s for s in self.symbols if s in self._universe]
-                    dropped = len(self.symbols) - len(kept)
-                    if dropped:
-                        self.symbols = kept
-                        log.info("вселенная обновлена за сутки: -%d монет",
-                                 dropped)
+                    await self.refresh_universe()
                 except Exception as e:
                     log.warning("вселенная за сутки не обновилась: %s",
                                 str(e)[:60])
@@ -513,6 +504,45 @@ class Ml5hEngine:
                                 "мой не поставлен, повторю позже", sym)
             else:
                 log.exception("%s: ошибка установки биржевого стопа", sym)
+
+    async def refresh_universe(self) -> None:
+        """Суточная пересборка вселенной (владелец 04.11, честная схема):
+        топ-N по обороту за 30 дней + возраст >180д, БЕЗ BTC/ETH.
+        Входящие монеты получают прогрев истории сразу — торгуют с
+        следующего бара. Выходящие перестают получать новые позиции
+        (открытые доезжают). Полный список — в журнал."""
+        self._universe = await asyncio.to_thread(
+            self.ex.top_universe, self.c.universe_top,
+            self.c.universe_min_age_days, tuple(self.c.universe_exclude))
+        old_set = set(self.symbols)
+        entering = sorted(s for s in self._universe if s not in old_set)
+        leaving = sorted(s for s in self.symbols if s not in self._universe)
+        if entering:
+            for sym in entering:
+                rows = await asyncio.to_thread(
+                    self.ex.fetch_klines, sym, "30m", self.c.warmup_bars)
+                rows = rows[:-1]
+                if len(rows) < 300:
+                    log.warning("%s: вошёл во вселенную, но истории мало "
+                                "(%d) — подожду следующего пересчёта",
+                                sym, len(rows))
+                    continue
+                df = pd.DataFrame(rows, columns=KLINE_COLS)
+                for c in ("open", "high", "low", "close", "volume",
+                          "quote_volume", "taker_buy_base"):
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+                df["open_time"] = df["open_time"].astype(np.int64)
+                df.index = pd.to_datetime(df["open_time"], unit="ms")
+                self.bars[sym] = df[["open_time", "open", "high", "low",
+                                     "close", "volume", "quote_volume",
+                                     "taker_buy_base"]]
+                await asyncio.to_thread(self.ex.setup_symbol, sym)
+            self.symbols = sorted(set(self.symbols) | set(entering))
+        if leaving:
+            self.symbols = [s for s in self.symbols if s not in leaving]
+        log.info("вселенная пересобрана: +%d вошли (%s), -%d вышли (%s), "
+                 "итого %d монет", len(entering), ", ".join(entering[:5]),
+                 len(leaving), ", ".join(leaving[:5]), len(self.symbols))
 
     async def slot_cap(self) -> int:
         """Текущий потолок стола: max_slots, урезанный свободной маржей
