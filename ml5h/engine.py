@@ -119,8 +119,9 @@ class Ml5hEngine:
                 log.warning("%s: нет на бирже (делистнута) — исключён", s)
         self.symbols = live
         # вселенная владельца (04.11): топ-200 по объёму + возраст >180д
+        # ML5H_UNIVERSE_TOP=0 выключает фильтр (полная вселенная 515)
         self._universe = None
-        if self.c.universe_top > 0:
+        if self.c.universe_top > 0 and os.environ.get("ML5H_UNIVERSE_TOP") != "0":
             self._universe = await asyncio.to_thread(
                 self.ex.top_universe, self.c.universe_top,
                 self.c.universe_min_age_days,
