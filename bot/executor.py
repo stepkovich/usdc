@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import urllib.request
 from urllib.parse import urlparse
 import json
 import time
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 from decimal import ROUND_DOWN, ROUND_UP
@@ -482,54 +480,13 @@ class Executor:
         info = self.client.rest_api.exchange_information().data()
         d = info.model_dump(by_alias=True)
         from bot.markets import parse_filters
-        if not hasattr(self, "onboard_date"):
-            self.onboard_date = {}
         for s in d.get("symbols", []):
             if s.get("symbol") in symbols and s.get("status") == "TRADING":
-                if s.get("onboardDate") is not None:
-                    self.onboard_date[s["symbol"]] = int(s["onboardDate"])
                 try:
                     self.filters[s["symbol"]] = parse_filters(s["symbol"],
                                                               s["filters"])
                 except Exception as e:
                     log.warning("фильтры %s: %s", s["symbol"], e)
-
-    def daily_volume_30d(self, symbol: str) -> float:
-        """Объём монеты за последние 30 дней: один запрос дневных свечей."""
-        try:
-            raw = urllib.request.urlopen(
-                "https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=1d&limit=30"
-                % symbol, timeout=15).read()
-            rows = json.loads(raw)
-            return sum(float(r[7]) for r in rows if len(r) > 7)
-        except Exception as e:
-            log.warning("30д объём %s: %s", symbol, str(e)[:60])
-            return -1.0
-
-    def top_universe(self, top_n: int = 200, min_age_days: int = 180,
-                     exclude: tuple = ("BTCUSDT", "ETHUSDT")) -> set:
-        """Вселенная владельца (04.11, честная схема): топ-N по обороту за
-        скользящие 30 дней (дневные свечи, как мерил бэктест) + монета
-        старше min_age_days (onboardDate из exchangeInfo) минус
-        исключения. Ранг — по 30-дневному обороту, окно едет с календарём."""
-        now_ms = int(time.time() * 1000)
-        min_age_ms = max(0, min_age_days) * 86_400_000
-        cands = [s for s in self.filters
-                 if s not in set(exclude)
-                 and (getattr(self, "onboard_date", {}).get(s, 10**12) == 10**12
-                      or now_ms - self.onboard_date[s] >= min_age_ms)]
-        log.info("вселенная: кандидатов с возрастом >%dд: %d",
-                 min_age_days, len(cands))
-        vol = []
-        with ThreadPoolExecutor(16) as pool:
-            for s, v in zip(cands, pool.map(self.daily_volume_30d, cands)):
-                if v >= 0:
-                    vol.append((v, s))
-        vol.sort(reverse=True)
-        uni = {s for _v, s in vol[:max(0, top_n)]}
-        log.info("вселенная: топ-%d по 30д-обороту = %d монет",
-                 top_n, len(uni))
-        return uni
 
     def cancel_order(self, symbol: str, order_id: int) -> bool:
         try:
