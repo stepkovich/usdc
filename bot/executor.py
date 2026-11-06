@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import urllib.request
 from urllib.parse import urlparse
 import json
 import time
