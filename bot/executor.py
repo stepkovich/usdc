@@ -521,7 +521,7 @@ class Executor:
                  min_age_days, len(cands))
         vol = []
         with ThreadPoolExecutor(16) as pool:
-            for s, v in pool.map(self.daily_volume_30d, cands):
+            for s, v in zip(cands, pool.map(self.daily_volume_30d, cands)):
                 if v >= 0:
                     vol.append((v, s))
         vol.sort(reverse=True)
