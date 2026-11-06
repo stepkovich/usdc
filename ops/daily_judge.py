@@ -22,6 +22,7 @@ GTX-отказы и позиции движка (несколько лишних
 """
 import io
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -34,7 +35,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-ROOT = Path("/home/iek/PycharmProjects/USDC")
+ROOT = Path(os.environ.get("JUDGE_ROOT", "/home/iek/PycharmProjects/USDC"))
 sys.path.insert(0, str(ROOT))
 from ml5h.features import make_features, g_cross, sym_id  # noqa: E402
 

@@ -6,7 +6,7 @@
 # 3) storm_meta: мета переучивается на сигналах новой Бури -> на DO
 # Владелец 27.10: реал на DigitalOcean, Франция упразднена.
 set -e
-cd /home/iek/PycharmProjects/USDC
+cd ${JUDGE_ROOT:-/home/iek/PycharmProjects/USDC}
 source ops/tg_env.sh 2>/dev/null || true
 notify() { ./ops/tg_notify.sh "$1"; }
 
@@ -64,7 +64,7 @@ else
   notify "⚠️ Мета: файл не получен — работает предыдущая"
 fi
 # --- 5. СИНК МОДЕЛЕЙ В РЕПО (бой = репо, без ручной памяти) ---
-cd /home/iek/PycharmProjects/USDC
+cd ${JUDGE_ROOT:-/home/iek/PycharmProjects/USDC}
 if git status --porcelain models/ | grep -q .; then
   git add models/
   git -c user.name=iek -c user.email=iek@local \
