@@ -220,6 +220,10 @@ class Ml5hEngine:
     async def tick(self) -> None:
         now = datetime.now(timezone.utc)
         self.maybe_reload_model()
+        if now.minute == 0 and now.hour != getattr(self, "_bal_hour", -1):
+            self._bal_hour = now.hour   # депозит днём сразу влияет на сайзинг
+            self.balance = await asyncio.to_thread(
+                self.ex.account_wallet_balance, "USDT")
         if now.date() != self.day_key:
             self.day_key = now.date()
             self.day_pnl = Decimal(0)
@@ -505,7 +509,6 @@ class Ml5hEngine:
         if bb <= 0:
             return
         df = self.bars[sym]
-        tick = float(df["close"].iloc[-1]) * 0  # цена — с биржи, не из баров
         qty = self.qty_for(sym, Decimal(str(bb)))
         if qty <= 0:
             log.warning("%s: лот не сошёлся — символ исключён", sym)

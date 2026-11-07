@@ -317,6 +317,13 @@ def main():
             f.write(json.dumps(s) + "\n")
     print(f"новых сигналов {len(new)} (всего {len(seen) + len(new)})",
           flush=True)
+    # ФЛАГ ПЕРЕОБУЧЕНИЯ: если бот его выставил — уведомить владельца
+    # (решение о внеплановом пересмотре — его, автозапуска нет)
+    flag = ROOT / "data" / "signals" / "retrain_needed"
+    if flag.exists():
+        import bot.telegram as tgmod
+        tgmod.fire("🧠⚠️ Флаг переобучения активен (30 сделок в минусе) — "
+                   "требуется решение владельца")
 
     # --- разрешение исходов: закрываемые при текущем кеше ---
     closes_all = {}
@@ -326,6 +333,20 @@ def main():
         if df is not None:
             closes_all[sym] = (df["open_time"].values,
                                df["close"].values)
+    # ЧЕСТНАЯ ФОРМУЛА ЭКЗАМЕНА: стоп -15% по реальным low/high свечей
+    # (худший случай внутри бара: стоп раньше тейка), комиссии как в бою.
+    lows_all = {}; highs_all = {}
+    for sym in {s["sym"] for s in _load_signals()} | {s["sym"] for s in new}:
+        df = load_sym(sym)
+        if df is not None:
+            lows_all[sym] = df["low"].values; highs_all[sym] = df["high"].values
+    def honest_pnl(sym, ot, side, cls, j):
+        stop = cls[j] * (1 - 0.15) if side == 1 else cls[j] * (1 + 0.15)
+        for k in range(j + 1, min(j + 11, len(cls))):
+            lo, hi = lows_all[sym][k], highs_all[sym][k]
+            if side == 1 and lo <= stop: return stop, True
+            if side == -1 and hi >= stop: return stop, True
+        return cls[min(j + 10, len(cls) - 1)], False
     res_path = JDIR / "results.jsonl"
     done = set()
     if res_path.exists():
@@ -344,8 +365,10 @@ def main():
         j = int(np.searchsorted(ots, s["ot"]))
         if j + 10 >= len(ots) or ots[j] != s["ot"]:
             continue                          # ещё не доехал
-        pnl = s["side"] * (cls[j + 10] / cls[j] - 1) * 1e4 - 10.0
-        out = dict(s, pnl_bp=round(float(pnl), 2))
+        exit_px, stopped = honest_pnl(s["sym"], s["ot"], s["side"], cls, j)
+        pnl = s["side"] * (exit_px / cls[j] - 1) * 1e4 - 10.0
+        if stopped: pnl -= 12.0   # стоп = тейкер-выход: ком+слип поверх
+        out = dict(s, pnl_bp=round(float(pnl), 2), stopped=bool(stopped))
         resolved.append(out)
     if resolved:
         with open(res_path, "a") as f:
