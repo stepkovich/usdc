@@ -535,7 +535,8 @@ class Ml5hEngine:
         log.info("%s: GTX-вход выставлен @%s qty=%s p=%.3f", sym, bb, qty, p)
 
     async def open_short(self, sym: str, p: float) -> None:
-        """Зеркало open_long: SELL post-only по аску, taker-фолбэк."""
+        """Зеркало open_long: SELL post-only по аску; цена ушла сквозь
+        уровень — сигнал пропускается (как у лонга, без тейкер-погони)."""
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
         if not top:
             return
@@ -562,15 +563,9 @@ class Ml5hEngine:
                 return
             raise
         if oid is None:
-            oid = await asyncio.to_thread(self.ex.place_market, sym, "SELL",
-                                          qty)
-            if oid is None:
-                return
-            info = await asyncio.to_thread(self.ex.query_order_full, sym, oid)
-            px = float((info or {}).get("avgPrice") or 0)
-            self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
-                             "p": p, "maker_entry": False, "side": "SHORT"}
-            tg.fire(f"🔴 <b>ML5 ВХОД {sym} ШОРТ</b> {qty} @ {px} (taker) p={p:.2f}")
+            # зеркало лонга: экзамен считал вход по цене лимитки —
+            # погоня тейкером = вход хуже обещанного, сигнал пропускаем
+            log.info("%s: цена ушла от уровня — сигнал пропущен", sym)
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": ba, "p": p,
                              "ts": time.time(), "side": "SHORT"}
