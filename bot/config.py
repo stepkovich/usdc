@@ -77,6 +77,7 @@ class ML5HConfig(BaseModel):
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
     quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
     meta_gate: bool = False                        # мета-подтверждение (12.10, идея владельца)
+    gate_true: float = 0.60                        # настоящий шанс для входа (после калибровки)
     taker_fallback: bool = False                   # демо: мейкер не взялся за TTL -> вход по рынку
     meta_model_path: Path = ROOT / "data" / "models" / "meta.txt"
 
@@ -104,6 +105,7 @@ class LobConfig(BaseModel):
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
     quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
     meta_gate: bool = False                        # мета-подтверждение (12.10, идея владельца)
+    gate_true: float = 0.60                        # настоящий шанс для входа (после калибровки)
     taker_fallback: bool = False                   # демо: мейкер не взялся за TTL -> вход по рынку
     meta_model_path: Path = ROOT / "data" / "models" / "meta.txt"
 
@@ -153,6 +155,8 @@ class Config(BaseModel):
             cfg.ml5h.meta_gate = os.environ["ML5H_META"] == "1"
         if os.environ.get("ML5H_TAKER_FALLBACK"):
             cfg.ml5h.taker_fallback = os.environ["ML5H_TAKER_FALLBACK"] == "1"
+        if os.environ.get("ML5H_GATE_TRUE"):
+            cfg.ml5h.gate_true = float(os.environ["ML5H_GATE_TRUE"])
         if os.environ.get("ML5H_MAX_SLOTS"):
             cfg.ml5h.max_slots = int(os.environ["ML5H_MAX_SLOTS"])
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"

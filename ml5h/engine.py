@@ -96,6 +96,19 @@ class Ml5hEngine:
         if meta.get("gate"):
             self.c.gate = float(meta["gate"])
         self.model = lgb.Booster(model_file=str(self.c.model_path))
+        # калибровка (07.11): карта «сырая уверенность -> настоящий шанс».
+        # Файл может отсутствовать — тогда работает сырой гейт 0.65.
+        self._cal_x = self._cal_y = None
+        try:
+            cal = json.loads(Path(str(self.c.model_path.parent)
+                                  / "calibration.json").read_text())
+            self._cal_x = np.array(cal["iso_x"], dtype="float64")
+            self._cal_y = np.array(cal["iso_y"], dtype="float64")
+            log.info("калибровка загружена (%d точек) — гейт в настоящих %%",
+                     len(self._cal_x))
+        except Exception as e:
+            log.info("калибровки нет (%s) — гейт по сырой уверенности",
+                     str(e)[:50])
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
                  self.c.gate)
@@ -362,7 +375,9 @@ class Ml5hEngine:
                                  sym, p, pw)
                         continue
                     self.meta_pass += 1
-                scored.append([abs(p - 0.5), p, sym, atr])
+                # калибровка: истинный шанс роста рядом с сырой уверенностью
+                scored.append([abs(p - 0.5), p, sym, atr,
+                               self.true_prob(p)])
         # 1.5) фильтр «тихая треть» (рентген 12.10: сделки в нижней
         #      терцили ATR вселенной −3.2бп на 21.8к сделок, летучая
         #      треть +85.7). Порог = живая 1/3-квантиль atr_pct вселенной
@@ -401,16 +416,25 @@ class Ml5hEngine:
                            int(avail // margin_one))
             if slot_cap < slots:
                 slot_cap = slots     # уже открытое не считаем лишним
-        for conf, p, sym, _atr in scored:
+        for conf, p, sym, _atr, t_true in scored:
             if slots >= slot_cap:
                 log.info("очередь: %s p=%.3f — слотов нет (%d/%d, своб. маржа %s) — "
                          "ждёт следующего бара", sym, p, slots, slot_cap, avail)
                 continue
             try:
                 if p > self.c.gate:
+                    if t_true < self.c.gate_true:
+                        log.info("%s: честный шанс %.0f%% < %.0f%% — пропуск",
+                                 sym, t_true * 100, self.c.gate_true * 100)
+                        continue
                     await self.open_long(sym, p)
                     slots += 1
                 else:
+                    if 1 - t_true < self.c.gate_true:
+                        log.info("%s: честный шанс падения %.0f%% < %.0f%% — пропуск",
+                                 sym, (1 - t_true) * 100,
+                                 self.c.gate_true * 100)
+                        continue
                     await self.open_short(sym, p)
                     slots += 1
             except BinanceError as e:
