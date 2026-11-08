@@ -37,7 +37,7 @@ docker run -d --name unified-real --restart unless-stopped \
 файлы моделей — пересборка не нужна:
 ```
 git pull
-cp models/*.txt /root/usdc-real/data/models/   # том монтируется сюда
+cp models/*.txt models/calibration.json /root/usdc-real/data/models/
 docker restart unified-real                     # движок перечитает модель
 ```
 Пересборка (`docker compose up -d --build`) нужна только при изменении

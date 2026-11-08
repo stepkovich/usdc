@@ -190,6 +190,15 @@ class Ml5hEngine:
                 new_syms = [s for s in (self.c.symbols or meta["symbols"])
                             if s not in self.symbols]
                 self.symbols = self.c.symbols or meta["symbols"]
+                try:
+                    cal = json.loads((self.c.model_path.parent
+                                      / "calibration.json").read_text())
+                    self._cal_x = np.array(cal["iso_x"], dtype="float64")
+                    self._cal_y = np.array(cal["iso_y"], dtype="float64")
+                    log.info("калибровка перечитана (%d точек)",
+                             len(self._cal_x))
+                except Exception as e:
+                    log.warning("калибровка при перезагрузке: %s", str(e)[:60])
                 self._model_loaded_mtime = mt
                 import bot.telegram as tg
                 tg.fire(f"🧠 <b>ML-5ч</b>: новая модель получена "
@@ -462,6 +471,13 @@ class Ml5hEngine:
         if not fl or px <= 0:
             return Decimal(0)
         return fl.qty_for_notional(self.notional(sym), px) or Decimal(0)
+
+    def true_prob(self, p: float) -> float:
+        """Настоящий шанс роста по карте калибровки (np.interp по
+        изотоническим порогам). Без карты — сырая уверенность как есть."""
+        if self._cal_x is None:
+            return p
+        return float(np.interp(p, self._cal_x, self._cal_y))
 
     async def place_stop(self, sym: str, pos: dict) -> None:
         """БИРЖЕВОЙ СТОП (владелец 02.11): защита позиции живёт на бирже,

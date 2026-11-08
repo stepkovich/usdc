@@ -187,6 +187,9 @@ def null_pct(te, n_real, seeds=50):
 
 all_T = []
 nulls = []
+oos_p = []
+oos_y = []
+
 for k, qq in enumerate(test_q):
     trd = data[data["quarter"] < qq]
     ted = data[data["quarter"] == qq]
@@ -198,6 +201,8 @@ for k, qq in enumerate(test_q):
     T = collect(d)
     T["quarter"] = qq
     all_T.append(T)
+    oos_p.append(d["p"].values.astype("float64"))
+    oos_y.append(d["y"].values.astype("float64"))
     if k >= 6 and len(T):
         nl = null_pct(ted, len(T))
         if nl:
@@ -230,6 +235,22 @@ if verdict:
         "universe": "wide", "verdict": True},
         open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
     print("модель сохранена", flush=True)
+    # КАЛИБРОВКА: изотоническая карта «сырая p -> истинный шанс» на
+    # невиданных предсказаниях фолдов (едет на сервер вместе с моделью)
+    try:
+        from sklearn.isotonic import IsotonicRegression
+        op = np.concatenate(oos_p); oy = np.concatenate(oos_y)
+        iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+        iso.fit(op, oy)
+        json.dump({"iso_x": iso.X_thresholds_.tolist(),
+                   "iso_y": iso.y_thresholds_.tolist(),
+                   "trained_at": datetime.datetime.now(
+                       datetime.timezone.utc).isoformat()},
+                  open("/kaggle/working/calibration.json", "w"), indent=1)
+        print("калибровочная карта сохранена (",
+              len(iso.X_thresholds_), "точек)", flush=True)
+    except Exception as e:
+        print("калибровка не построена:", e, flush=True)
 json.dump({"verdict": verdict, "avg": round(avg, 4),
            "pos_quarters": pos_q, "null_pct": nl_pct,
            "by_quarter": by_q},

@@ -16,6 +16,7 @@ python3 -m kaggle kernels output sewerted/usdc-ml5h-wide -p /tmp/wide_out >/dev/
 VERDICT=$(python3 -c "import json; print(json.load(open('/tmp/wide_out/report.json')).get('verdict', False))" 2>/dev/null || echo False)
 if [ "$VERDICT" = "True" ] && [ -f /tmp/wide_out/ml5h.txt ]; then
   cp /tmp/wide_out/ml5h.txt /tmp/wide_out/ml5h_meta.json /root/usdc-real/data/models/
+  [ -f /tmp/wide_out/calibration.json ] && cp /tmp/wide_out/calibration.json /root/usdc-real/data/models/
   docker restart unified-real >/dev/null 2>&1
   notify "🧠✅ Буря сдала — новая модель на сервере"
 else

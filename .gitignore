@@ -14,3 +14,4 @@ ops/judge/klines/
 ops/judge/metrics/
 *.db-wal
 *.db-shm
+ops/vps.env: VPS_SSH=root@159.65.133.26

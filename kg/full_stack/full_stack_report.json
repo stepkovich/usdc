@@ -1,0 +1,88 @@
+{
+ "folds": [
+  {
+   "fold": "2021Q2",
+   "n_raw": 5241,
+   "cut_meta": 0,
+   "cut_quiet": 1612,
+   "cut_cal": 0,
+   "cut_slots": 1608,
+   "n_entries": 345,
+   "wins": 190,
+   "wr": 55.1,
+   "avg_bp": 24.6,
+   "sum_bp": 8493.0,
+   "per_day": 0.07
+  },
+  {
+   "fold": "2022Q2",
+   "n_raw": 2960,
+   "cut_meta": 0,
+   "cut_quiet": 864,
+   "cut_cal": 0,
+   "cut_slots": 892,
+   "n_entries": 969,
+   "wins": 580,
+   "wr": 59.9,
+   "avg_bp": 64.1,
+   "sum_bp": 62151.0,
+   "per_day": 0.14
+  },
+  {
+   "fold": "2023Q2",
+   "n_raw": 1025,
+   "cut_meta": 0,
+   "cut_quiet": 265,
+   "cut_cal": 709,
+   "cut_slots": 30,
+   "n_entries": 11,
+   "wins": 10,
+   "wr": 90.9,
+   "avg_bp": 185.7,
+   "sum_bp": 2043.0,
+   "per_day": 0.0
+  },
+  {
+   "fold": "2024Q1",
+   "n_raw": 3059,
+   "cut_meta": 0,
+   "cut_quiet": 836,
+   "cut_cal": 2107,
+   "cut_slots": 55,
+   "n_entries": 51,
+   "wins": 27,
+   "wr": 52.9,
+   "avg_bp": -245.9,
+   "sum_bp": -12539.0,
+   "per_day": 0.0
+  },
+  {
+   "fold": "2025Q1",
+   "n_raw": 3361,
+   "cut_meta": 0,
+   "cut_quiet": 980,
+   "cut_cal": 2350,
+   "cut_slots": 0,
+   "n_entries": 24,
+   "wins": 14,
+   "wr": 58.3,
+   "avg_bp": -76.8,
+   "sum_bp": -1843.0,
+   "per_day": 0.0
+  },
+  {
+   "fold": "2026Q1",
+   "n_raw": 1312,
+   "cut_meta": 0,
+   "cut_quiet": 320,
+   "cut_cal": 986,
+   "cut_slots": 0,
+   "n_entries": 6,
+   "wins": 6,
+   "wr": 100.0,
+   "avg_bp": 594.9,
+   "sum_bp": 3570.0,
+   "per_day": 0.0
+  }
+ ]
+}
