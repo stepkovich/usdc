@@ -100,8 +100,8 @@ class Ml5hEngine:
         # Файл может отсутствовать — тогда работает сырой гейт 0.65.
         self._cal_x = self._cal_y = None
         try:
-            cal = json.loads(Path(str(self.c.model_path.parent)
-                                  / "calibration.json").read_text())
+            cal = json.loads((self.c.model_path.parent
+                              / "calibration.json").read_text())
             self._cal_x = np.array(cal["iso_x"], dtype="float64")
             self._cal_y = np.array(cal["iso_y"], dtype="float64")
             log.info("калибровка загружена (%d точек) — гейт в настоящих %%",
