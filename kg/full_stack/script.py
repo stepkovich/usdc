@@ -114,6 +114,8 @@ def build_arrays(zpath):
     btc.index = pd.to_datetime(btc["open_time"], unit="ms")
     btc = btc["close"].astype("float32")
     Fs, ys, ots, cs, lo, hi, atrs = [], [], [], [], [], [], []
+    bounds, syms = [], []      # границы блока каждой монеты в склейке
+    off = 0
     for i, name in enumerate(members, 1):
         sym = name.replace("_30m.csv", "")
         df = pd.read_csv(io.BytesIO(zf.read(name)),
@@ -148,23 +150,34 @@ def build_arrays(zpath):
             lo.append(df["low"].values[keep])
             hi.append(df["high"].values[keep])
             atrs.append(atr[keep])
+            bounds.append(off); syms.append(sym)
+            off += int(keep.sum())
         del X, df
         if i % 150 == 0:
             log(f"{i}/{len(members)}")
     F = np.concatenate(Fs); del Fs
+    bounds.append(off)     # правая граница последнего блока
     return {"F": F, "y": np.concatenate(ys),
             "ot": np.concatenate(ots),
             "close": np.concatenate(cs),
             "low": np.concatenate(lo), "high": np.concatenate(hi),
-            "atr": np.concatenate(atrs)}
+            "atr": np.concatenate(atrs),
+            "bounds": bounds, "syms": syms}
 
 
 zp = find_zip("panel.zip")
 assert zp, "panel.zip не найден"
 A = build_arrays(zp)
+# Панель склеена по монетам: строки СВОЕЙ монеты идут подряд, у каждой
+# монеты свой блок [bounds[i], bounds[i+1]). Проход выхода по сделке
+# делает шаги по СВОЕМУ блоку — глобальный searchsorted по времени тут
+# не нужен вовсе и был бы враньём: сосед по массиву = чужая монета
+# (потерю сделок несортированным поиском поймал помощник 08.11).
+RANGE = {zlib.crc32(s.encode()) & 0xFFFF: (A["bounds"][i], A["bounds"][i + 1])
+         for i, s in enumerate(A["syms"])}
 _yr = pd.DatetimeIndex(pd.to_datetime(A["ot"], unit="ms")).year
 _qt = pd.DatetimeIndex(pd.to_datetime(A["ot"], unit="ms")).quarter
-A["qc"] = ((_yr - 2020) * 4 + _qt).astype(np.int16)
+A["qc"] = ((_yr - 2020) * 4 + (_qt - 1)).astype(np.int16)
 del _yr, _qt
 codes = sorted(int(c) for c in np.unique(A["qc"]))
 qq_all = [f"{2020 + c // 4}Q{c % 4 + 1}" for c in codes]
@@ -175,7 +188,7 @@ log(f"экзамен: {TEST_Q}")
 
 def qcode_from_str(qq):
     y, q = qq.split("Q")
-    return (int(y) - 2020) * 4 + int(q)
+    return (int(y) - 2020) * 4 + int(q) - 1
 
 
 stats_by_fold = []
@@ -218,9 +231,9 @@ for qq in TEST_Q:
         mm.fit(MX, MY)
         kept = []
         for row in cand:
-            p = row.p; atr = row.atr
-            v = np.concatenate([np.array([getattr(row, f) for f in FEATS[:-1]]),
-                                [float(row.sid), p, atr]])
+            fv = A["F"][row.gi]     # признаки сигнала — из своей строки
+            v = np.concatenate([fv[:SYM_IDX], fv[SYM_IDX + 1:],
+                                [row.p, row.atr]])
             pw = float(mm.predict(v.reshape(1, -1))[0])
             if pw >= 0.5:
                 kept.append(row)
@@ -276,26 +289,26 @@ for qq in TEST_Q:
             cut_slots += 1
             continue
         side = 1 if row.p > GATE else -1
-        entries.append((row.sid, row.ot, row.p, row.atr, side, row.Index))
+        entries.append((row.sid, row.ot, row.p, row.atr, side, row.gi))
         open_until.append(row.ot + H * 1800_000)
 
     # ---- исходы сделок (экзаменационная формула) ----
     ots = A["ot"]; lows = A["low"]; highs = A["high"]; cls = A["close"]
     t_res = []
     for sid, ot, p_, atr, side, gi in entries:
-        j = int(np.searchsorted(ots, ot))
-        if j >= len(ots) or ots[j] != ot or j + 1 >= len(ots):
-            continue
-        c0 = cls[j]
+        s_, e_ = RANGE.get(sid, (-1, -1))
+        if not (s_ <= gi < e_) or ots[gi] != ot or gi + 1 >= e_:
+            continue          # сделка вне блока своей монеты — санити
+        c0 = cls[gi]
         stop = c0 * (1 - STOP) if side == 1 else c0 * (1 + STOP)
         exit_px = None
-        for k in range(j + 1, min(j + 1 + H, len(ots))):
+        for k in range(gi + 1, min(e_, gi + 1 + H)):
             if side == 1 and lows[k] <= stop:
                 exit_px = stop; break
             if side == -1 and highs[k] >= stop:
                 exit_px = stop; break
-        if exit_px is None and j + 10 < len(ots):
-            exit_px = cls[j + 10]
+        if exit_px is None and gi + H < e_:
+            exit_px = cls[gi + H]
         if exit_px is None:
             continue
         pnl_bp = (side * (exit_px / c0 - 1) - MAKER_FEE - TAKER_FEE - SLIP) * 1e4
@@ -308,14 +321,14 @@ for qq in TEST_Q:
         cal_hist.append((p_, win))
 
     wins = sum(1 for t in t_res if t[3] > 0)
-    ndays = max(1, int((A['ot'][mte[-1]] - A['ot'][mte[0]]) // 86400000) + 1)
+    ndays = max(1, int((ots[mte].max() - ots[mte].min()) // 86400000) + 1)
     stats_by_fold.append(dict(
         fold=qq, n_raw=n_raw, cut_meta=cut_meta, cut_quiet=cut_quiet,
         cut_cal=cut_cal, cut_slots=cut_slots, n_entries=len(t_res),
         wins=wins, wr=round(wins / max(1, len(t_res)) * 100, 1),
         avg_bp=round(float(np.mean([t[3] for t in t_res])), 1) if t_res else 0,
         sum_bp=round(float(np.sum([t[3] for t in t_res])), 0),
-        per_day=round(len(t_res) / ndays, 2)))
+        per_day=round(len(t_res) / ndays, 2), days=ndays))
     log(f"{qq}: сырых {n_raw} -> мета -{cut_meta} -> тихая -{cut_quiet} "
         f"-> калибр -{cut_cal} -> слоты -{cut_slots} -> сделок {len(t_res)} "
         f"(win {wins}/{len(t_res)})")
@@ -334,7 +347,7 @@ for s_ in stats_by_fold:
     print(f"{s_['fold']} | {s_['n_raw']} | -{s_['cut_meta']} | -{s_['cut_quiet']} | "
           f"-{s_['cut_cal']} | -{s_['cut_slots']} | {s_['n_entries']} | {s_['wr']}% | "
           f"{s_['avg_bp']} | {s_['per_day']}/день", flush=True)
-    tot_entries += s_["n_entries"]; tot_days += s_["per_day"] and 90
-print(f"\nВСЕГО сделок: {tot_entries} за ~{len(stats_by_fold)*90} дней = "
-      f"{tot_entries/max(1,len(stats_by_fold)*90):.1f}/день", flush=True)
+    tot_entries += s_["n_entries"]; tot_days += s_["days"]
+print(f"\nВСЕГО сделок: {tot_entries} за {tot_days} дней = "
+      f"{tot_entries/max(1,tot_days):.1f}/день", flush=True)
 log("ПОЛНЫЙ СТЕК ГОТОВ")
