@@ -92,7 +92,8 @@ def model_audit() -> None:
     ТГ только при изменении с прошлого прогона (помощник, 09.11)."""
     files = [("ml5h.txt", ROOT / "models" / "ml5h.txt"),
              ("ml5h_meta.json", ROOT / "models" / "ml5h_meta.json"),
-             ("meta.txt", META_PATH)]
+             ("meta.txt", META_PATH),
+             ("calibration.json", ROOT / "models" / "calibration.json")]
     stamp = {"run": str(yesterday_utc()),
              "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     for name, p in files:
