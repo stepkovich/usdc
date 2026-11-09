@@ -24,7 +24,7 @@ SLIP, MAKER_FEE, TAKER_FEE = 0.0005, 0.0002, 0.0005
 STOP = 0.15
 H = 10
 SLOTS = 10
-GATE_TRUE = 0.55  # ЛАБА v9: замер ослабленного порога (в бою остаётся 0.60)
+GATE_TRUE = 0.60  # боевой порог; замер 0.55 сделан в v9 на Кагле 09.11 (в репу по решению не едет)
 PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
               subsample=0.8, colsample_bytree=0.8, random_state=42,
               n_jobs=4, verbosity=-1, class_weight="balanced")

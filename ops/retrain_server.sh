@@ -33,6 +33,8 @@ python3 -m kaggle kernels output sewerted/usdc-storm-meta -p /tmp/meta_cyc >/dev
 if [ -f /tmp/meta_cyc/meta.txt ]; then
   cp /tmp/meta_cyc/meta.txt /root/usdc-real/data/models/meta.txt
   cp /tmp/meta_cyc/meta.txt /root/usdc/models/meta.txt
+  # отчёт кёрнела (вердикт/фолды) в архив — OOS-различение код-проверяем каждый месяц
+  [ -f /tmp/meta_cyc/report.json ] && cp /tmp/meta_cyc/report.json /root/usdc/models/meta_report.json
   docker restart unified-real >/dev/null 2>&1 || notify "⚠️ рестарт unified-real не удался"
   notify "🧠✅ Мета переучена — бот и судья синхронны"
 else
