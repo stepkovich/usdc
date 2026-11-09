@@ -4,7 +4,7 @@
 exec 9>/tmp/judge.lock
 flock -n 9 || { echo "уже идёт"; exit 0; }
 cd /root/usdc
-source /root/usdc/.tg_env 2>/dev/null
+set -a; source /root/usdc/.tg_env 2>/dev/null; set +a
 docker run --rm \
   -v /root/usdc:/repo -w /repo \
   -v /root/usdc-real/data/models:/repo/models:ro \
