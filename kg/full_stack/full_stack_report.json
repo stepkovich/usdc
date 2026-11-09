@@ -92,18 +92,18 @@
   },
   {
    "fold": "2026Q4",
-   "n_raw": 72,
-   "cut_meta": 9,
-   "cut_quiet": 4,
-   "cut_cal": 59,
-   "cut_slots": 0,
-   "n_entries": 0,
-   "wins": 0,
-   "wr": 0.0,
-   "avg_bp": 0,
-   "sum_bp": 0.0,
-   "per_day": 0.0,
-   "days": 13
+   "n_raw": 302,
+   "cut_meta": 21,
+   "cut_quiet": 58,
+   "cut_cal": 184,
+   "cut_slots": 28,
+   "n_entries": 11,
+   "wins": 10,
+   "wr": 90.9,
+   "avg_bp": 665.8,
+   "sum_bp": 7324.0,
+   "per_day": 0.29,
+   "days": 38
   }
  ]
 }
