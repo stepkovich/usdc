@@ -29,8 +29,9 @@ rm -rf /tmp/meta_cyc && mkdir -p /tmp/meta_cyc
 python3 -m kaggle kernels output sewerted/usdc-storm-meta -p /tmp/meta_cyc >/dev/null 2>&1
 if [ -f /tmp/meta_cyc/meta.txt ]; then
   cp /tmp/meta_cyc/meta.txt /root/usdc-real/data/models/meta.txt
+  cp /tmp/meta_cyc/meta.txt /root/usdc/models/meta.txt
   docker restart unified-real >/dev/null 2>&1
-  notify "🧠✅ Мета переучена — бот перезапущен"
+  notify "🧠✅ Мета переучена — бот и судья синхронны"
 else
   notify "⚠️ Мета: файл не получен — работает предыдущая"
 fi
