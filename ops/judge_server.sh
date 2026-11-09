@@ -6,6 +6,7 @@ flock -n 9 || { echo "уже идёт"; exit 0; }
 cd /root/usdc
 docker run --rm \
   -v /root/usdc:/repo -w /repo \
+  -v /root/usdc-real/data/models:/repo/models:ro \
   -v /root/usdc-real/data:/app/data \
   -e JUDGE_ROOT=/repo \
   --entrypoint python3 usdc-unified /repo/ops/daily_judge.py \

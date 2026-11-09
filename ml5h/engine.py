@@ -121,6 +121,7 @@ class Ml5hEngine:
                     model_file=str(self.c.meta_model_path))
                 log.info("мета: замок загружен (%s) — вето при p_win<0.5",
                          self.c.meta_model_path.name)
+                self._meta_loaded_mtime = self._meta_mtime()
             except Exception as e:
                 log.warning("мета: не загрузилась (%s) — торгую без неё",
                             str(e)[:80])
@@ -175,6 +176,12 @@ class Ml5hEngine:
         except Exception:
             return 0.0
 
+    def _meta_mtime(self) -> float:
+        try:
+            return self.c.meta_model_path.stat().st_mtime
+        except Exception:
+            return 0.0
+
     def maybe_reload_model(self) -> None:
         mt = self._model_mtime()
         if mt and mt != getattr(self, "_model_loaded_mtime", -1):
@@ -212,6 +219,24 @@ class Ml5hEngine:
                          len(self.symbols), len(new_syms))
             except Exception as e:
                 log.warning("перезагрузка модели не удалась: %s", e)
+        # мета меняется ОТДЕЛЬНО от Бури (конвейер меты копирует только
+        # meta.txt) — свой mtime-трекер, иначе она живёт лишь до рестарта
+        # (помощник, 09.11)
+        mt_meta = self._meta_mtime()
+        if self.c.meta_gate and mt_meta \
+                and mt_meta != getattr(self, "_meta_loaded_mtime", -1):
+            try:
+                import lightgbm as lgb
+                self.meta = lgb.Booster(
+                    model_file=str(self.c.meta_model_path))
+                self._meta_loaded_mtime = mt_meta
+                import bot.telegram as tg
+                tg.fire("⚖️ <b>Мета</b>: новый замок подхвачен без рестарта")
+                log.info("мета перезагружена (обновлена %s)",
+                         datetime.fromtimestamp(mt_meta, timezone.utc)
+                         .strftime("%H:%M UTC"))
+            except Exception as e:
+                log.warning("перезагрузка меты не удалась: %s", e)
 
     async def _refresh_day_xchg(self) -> None:
         """БИРЖА — ИСТОЧНИК ПРАВДЫ (владелец, 15.10): день = ВСЕ потоки

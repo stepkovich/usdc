@@ -17,20 +17,23 @@ VERDICT=$(python3 -c "import json; print(json.load(open('/tmp/wide_out/report.js
 if [ "$VERDICT" = "True" ] && [ -f /tmp/wide_out/ml5h.txt ]; then
   cp /tmp/wide_out/ml5h.txt /tmp/wide_out/ml5h_meta.json /root/usdc-real/data/models/
   [ -f /tmp/wide_out/calibration.json ] && cp /tmp/wide_out/calibration.json /root/usdc-real/data/models/
-  docker restart unified-real >/dev/null 2>&1
+  # (г) git-архив всеми файлами — иначе декабрьский коммит собрал бы «франкенштейна»
+  cp /tmp/wide_out/ml5h.txt /tmp/wide_out/ml5h_meta.json /root/usdc/models/
+  [ -f /tmp/wide_out/calibration.json ] && cp /tmp/wide_out/calibration.json /root/usdc/models/
+  docker restart unified-real >/dev/null 2>&1 || notify "⚠️ рестарт unified-real не удался"
   notify "🧠✅ Буря сдала — новая модель на сервере"
 else
   notify "🧠⚠️ Буря НЕ сдала — остаётся текущая"
 fi
 notify "🧠 Мета: старт переобучения"
 (cd kg/storm_meta && python3 -m kaggle kernels push -p . >/dev/null 2>&1)
-for i in $(seq 1 40); do sleep 60; S=$(python3 -m kaggle kernels status sewerted/usdc-storm-meta 2>&1); echo "$S" | grep -q COMPLETE && break; echo "$S" | grep -qE "ERROR|CANCEL" && { notify "⚠️ Мета упала — работает предыдущая"; exit 1; }; done
+for i in $(seq 1 180); do sleep 60; S=$(python3 -m kaggle kernels status sewerted/usdc-storm-meta 2>&1); echo "$S" | grep -q COMPLETE && break; echo "$S" | grep -qE "ERROR|CANCEL" && { notify "⚠️ Мета упала — работает предыдущая"; exit 1; }; done
 rm -rf /tmp/meta_cyc && mkdir -p /tmp/meta_cyc
 python3 -m kaggle kernels output sewerted/usdc-storm-meta -p /tmp/meta_cyc >/dev/null 2>&1
 if [ -f /tmp/meta_cyc/meta.txt ]; then
   cp /tmp/meta_cyc/meta.txt /root/usdc-real/data/models/meta.txt
   cp /tmp/meta_cyc/meta.txt /root/usdc/models/meta.txt
-  docker restart unified-real >/dev/null 2>&1
+  docker restart unified-real >/dev/null 2>&1 || notify "⚠️ рестарт unified-real не удался"
   notify "🧠✅ Мета переучена — бот и судья синхронны"
 else
   notify "⚠️ Мета: файл не получен — работает предыдущая"

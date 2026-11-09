@@ -5,8 +5,8 @@
 пакетов биржи):
 1. Докачивает дневные пакеты 30м-свечей (data.binance.vision) с
    27.09.2026 до вчерашнего дня — поверх кеша панели data_cache_30m.
-2. Прогоняет ЗАМОРОЖЕННУЮ модель (models/ml5h.txt) на барах вчерашнего
-   дня по всем монетам — как боевой движок: те же признаки, gate из
+2. Прогоняет модель из ЖИВОЙ папки боевых моделей (models/, маунт :ro)
+   на барах вчерашнего дня по всем монетам — как боевой движок: те же признаки, gate из
    мета, cooldown 10 баров, живая терциль atr_pct по вселенной бара
    (тот же фильтр «тихая треть», что в бою с 12.10).
 3. Каждый сигнал (с фильтром и без) получает исход side×fwd(10 баров)
@@ -20,11 +20,13 @@
 GTX-отказы и позиции движка (несколько лишних сигналов — против нас
 не играет: сравнение с фильтром/без на одних сигналах).
 """
+import hashlib
 import io
 import json
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -51,7 +53,7 @@ FEATS = list(META["features"])
 GATE = float(META.get("gate", 0.65))
 SYMS = [s for s in META["symbols"] if s != "BTCUSDT"] + ["BTCUSDT"]
 model = lgb.Booster(model_file=str(ROOT / "models" / "ml5h.txt"))
-# мета судьи = БОЕВАЯ мета (в репо, синк после каждого переобучения)
+# мета судьи = БОЕВАЯ мета (живая папка боевых, один источник правды)
 META_PATH = ROOT / "models" / "meta.txt"
 meta_model = None
 if META_PATH.exists():
@@ -68,6 +70,50 @@ def daterange(a: date, b: date):
     while d <= b:
         yield d
         d += timedelta(days=1)
+
+
+def tg(text: str) -> None:
+    tok = os.environ.get("TELEGRAM_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if not tok or not chat:
+        return
+    try:
+        data = urllib.parse.urlencode(
+            {"chat_id": chat, "text": text}).encode()
+        urllib.request.urlopen(urllib.request.Request(
+            f"https://api.telegram.org/bot{tok}/sendMessage", data=data),
+            timeout=20)
+    except Exception as e:
+        print(f"ТГ не ушёл: {e}", flush=True)
+
+
+def model_audit() -> None:
+    """(в) штамп аудита: md5 трёх моделей в результаты каждого прогона,
+    ТГ только при изменении с прошлого прогона (помощник, 09.11)."""
+    files = [("ml5h.txt", ROOT / "models" / "ml5h.txt"),
+             ("ml5h_meta.json", ROOT / "models" / "ml5h_meta.json"),
+             ("meta.txt", META_PATH)]
+    stamp = {"run": str(yesterday_utc()),
+             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    for name, p in files:
+        try:
+            stamp[name] = hashlib.md5(p.read_bytes()).hexdigest()[:12]
+        except Exception:
+            stamp[name] = "нет"
+    apath = JDIR / "model_audit.jsonl"
+    prev = None
+    if apath.exists():
+        try:
+            prev = json.loads(apath.read_text().strip().splitlines()[-1])
+        except Exception:
+            prev = None
+    with open(apath, "a") as f:
+        f.write(json.dumps(stamp, ensure_ascii=False) + "\n")
+    changed = [k for k, _ in files if prev and stamp[k] != prev.get(k)]
+    if changed:
+        tg("⚖️ СУДЬЯ: сменился состав моделей!\n" + "\n".join(
+            f"{k}: {prev.get(k, '?')} → {stamp[k]}" for k in changed))
+        print("аудит моделей: изменилось " + ", ".join(changed), flush=True)
 
 def csv_path(sym: str, d: date) -> Path:
     return KCACHE / sym / f"{d.isoformat()}.csv"
@@ -261,6 +307,7 @@ def main():
     else:
         D = yesterday_utc()
     print("судья за", D, flush=True)
+    model_audit()
     download_days(list(daterange(PANEL_FROM, D)), SYMS)
     global load_sym_btc
     btc = load_sym("BTCUSDT")
