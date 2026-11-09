@@ -7,6 +7,8 @@
 # Владелец 27.10: реал на DigitalOcean, Франция упразднена.
 set -e
 cd ${JUDGE_ROOT:-/home/iek/PycharmProjects/USDC}
+[ -f ops/vps.env ] && . ops/vps.env
+: ${VPS_SSH:?"адрес сервера: создай ops/vps.env со строкой VPS_SSH=root@хост"}
 source ops/tg_env.sh 2>/dev/null || true
 notify() { ./ops/tg_notify.sh "$1"; }
 
@@ -38,8 +40,8 @@ python3 -m kaggle kernels output sewerted/usdc-ml5h-wide -p /tmp/wide_out >/dev/
 VERDICT=$(python3 -c "import json; print(json.load(open('/tmp/wide_out/report.json')).get('verdict', False))" 2>/dev/null || echo False)
 if [ "$VERDICT" = "True" ] && [ -f /tmp/wide_out/ml5h.txt ]; then
   cp /tmp/wide_out/ml5h.txt /tmp/wide_out/ml5h_meta.json /home/iek/PycharmProjects/USDC/models/
-  scp -q /home/iek/PycharmProjects/USDC/models/ml5h.txt /home/iek/PycharmProjects/USDC/models/ml5h_meta.json root@159.65.133.26:/root/usdc-real/data/models/
-  ssh root@159.65.133.26 'docker restart unified-real' >/dev/null 2>&1
+  scp -q /home/iek/PycharmProjects/USDC/models/ml5h.txt /home/iek/PycharmProjects/USDC/models/ml5h_meta.json ${VPS_SSH}:/root/usdc-real/data/models/
+  ssh ${VPS_SSH} 'docker restart unified-real' >/dev/null 2>&1
   notify "🧠✅ Буря сдала месячный экзамен — новая модель УЖЕ на сервере"
 else
   notify "🧠⚠️ Буря НЕ сдала месячный экзамен — остаётся текущая модель"
@@ -57,8 +59,8 @@ rm -rf /tmp/meta_cyc && mkdir -p /tmp/meta_cyc
 python3 -m kaggle kernels output sewerted/usdc-storm-meta -p /tmp/meta_cyc >/dev/null 2>&1
 if [ -f /tmp/meta_cyc/meta.txt ]; then
   cp /tmp/meta_cyc/meta.txt /home/iek/PycharmProjects/USDC/models/meta.txt
-  scp -q /home/iek/PycharmProjects/USDC/models/meta.txt root@159.65.133.26:/root/usdc-real/data/models/meta.txt
-  ssh root@159.65.133.26 'docker restart unified-real' >/dev/null 2>&1
+  scp -q /home/iek/PycharmProjects/USDC/models/meta.txt ${VPS_SSH}:/root/usdc-real/data/models/meta.txt
+  ssh ${VPS_SSH} 'docker restart unified-real' >/dev/null 2>&1
   notify "🧠✅ Мета переучена на свежей истории — развезена, бот перезапущен"
 else
   notify "⚠️ Мета: файл не получен — работает предыдущая"
@@ -70,8 +72,8 @@ if git status --porcelain models/ | grep -q .; then
   git -c user.name=iek -c user.email=iek@local \
       commit -q -m "месячное переобучение $(date -u +%F): модели в репо"
   git bundle create /tmp/usdc_models.bundle main
-  scp -q /tmp/usdc_models.bundle root@159.65.133.26:/tmp/
-  ssh root@159.65.133.26 'cd ~/usdc && git pull -q /tmp/usdc_models.bundle main && git push -q origin main; git reflog expire --expire=now --all; git gc --prune=now --quiet; rm -f /tmp/usdc_models.bundle' >/dev/null 2>&1 \
+  scp -q /tmp/usdc_models.bundle ${VPS_SSH}:/tmp/
+  ssh ${VPS_SSH} 'cd ~/usdc && git pull -q /tmp/usdc_models.bundle main && git push -q origin main; git reflog expire --expire=now --all; git gc --prune=now --quiet; rm -f /tmp/usdc_models.bundle' >/dev/null 2>&1 \
     && notify "📦 Модели синкнуты в репозитарий" \
     || notify "⚠️ Синк моделей в репо не прошёл — повторить вручную"
   rm -f /tmp/usdc_models.bundle

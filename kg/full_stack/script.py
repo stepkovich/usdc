@@ -196,7 +196,8 @@ for qq in TEST_Q:
     del m
     # кандидаты сырого гейта + кулдаун 5ч
     idx = pd.DataFrame({"sid": A["F"][mte, SYM_IDX].astype(int),
-                        "ot": A["ot"][mte], "p": p, "atr": A["atr"][mte]})
+                        "ot": A["ot"][mte], "p": p, "atr": A["atr"][mte],
+                        "gi": mte})
     idx = idx.sort_values(["sid", "ot"])
     cand = []
     last = {}
@@ -307,7 +308,7 @@ for qq in TEST_Q:
         cal_hist.append((p_, win))
 
     wins = sum(1 for t in t_res if t[3] > 0)
-    ndays = max(1, len(mte) // 48)
+    ndays = max(1, int((A['ot'][mte[-1]] - A['ot'][mte[0]]) // 86400000) + 1)
     stats_by_fold.append(dict(
         fold=qq, n_raw=n_raw, cut_meta=cut_meta, cut_quiet=cut_quiet,
         cut_cal=cut_cal, cut_slots=cut_slots, n_entries=len(t_res),
