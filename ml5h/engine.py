@@ -403,10 +403,11 @@ class Ml5hEngine:
                         pw = float(self.meta.predict(np.array([vec]))[0])
                     except Exception:
                         pw = 1.0
+                    log.info("мета: %s p=%.3f p_win=%.3f — %s",
+                             sym, p, pw,
+                             "ВЕТО" if pw < 0.5 else "принято")
                     if pw < 0.5:
                         self.meta_veto += 1
-                        log.info("мета: вето %s p=%.3f p_win=%.2f",
-                                 sym, p, pw)
                         continue
                     self.meta_pass += 1
                 # калибровка: истинный шанс роста рядом с сырой уверенностью
