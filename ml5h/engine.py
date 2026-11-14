@@ -70,21 +70,30 @@ class Ml5hEngine:
 
     # ---------- запуск ----------
     def _seed_model(self) -> None:
-        """Первый запуск на чистом сервере: модель из образа едет на том
-        данных (дальше живёт там и обновляется без пересборки)."""
-        if self.c.model_path.exists() and self.c.meta_path.exists():
-            return
+        """Первый запуск на чистом сервере: все 4 файла моделей из образа
+        едут на том данных (дальше живут там и обновляются без пересборки).
+        БЫЛО 2 из 4 (найдено при разборе переезда 14.11): без meta.txt и
+        calibration.json бот стартовал БЕЗ мета-замка и БЕЗ честного шанса —
+        урезанная система молча."""
         self.c.model_path.parent.mkdir(parents=True, exist_ok=True)
         import shutil
         base = Path(__file__).resolve().parent.parent / "models"
-        src_m, src_j = base / "ml5h.txt", base / "ml5h_meta.json"
-        if not (src_m.exists() and src_j.exists()):
+        names = ["ml5h.txt", "ml5h_meta.json", "meta.txt", "calibration.json"]
+        src = {n: base / n for n in names}
+        missing = [n for n, f in src.items() if not f.exists()]
+        if missing:
             raise RuntimeError(
-                "модель не найдена ни на томе данных, ни в образе — "
-                "положи ml5h.txt и ml5h_meta.json в data/models/")
-        shutil.copy(src_m, self.c.model_path)
-        shutil.copy(src_j, self.c.meta_path)
-        log.info("модель засеяна из образа на том данных")
+                f"в образе нет файлов моделей: {missing} — "
+                "положи их в models/ при сборке или в data/models/ на томе")
+        seeded = []
+        for n, f in src.items():
+            dst = self.c.model_path.parent / n
+            if not dst.exists():
+                shutil.copy(f, dst)
+                seeded.append(n)
+        if seeded:
+            log.info("модели засеяны из образа на том данных: %s",
+                     ", ".join(seeded))
 
     async def setup(self) -> None:
         self._seed_model()
