@@ -1,4 +1,5 @@
 .env
+.tg_env
 data/
 .venv/
 .idea/

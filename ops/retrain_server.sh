@@ -5,6 +5,11 @@
 set -e
 cd /root/usdc
 source /root/usdc/.tg_env 2>/dev/null
+# ключ Кегля из .env (один источник ключей на сервере); файлы ~/.kaggle
+# остаются как запасной вариант, если .env не заведён
+if [ -f /root/usdc/.env ]; then
+  set -a; source /root/usdc/.env; set +a
+fi
 notify() { curl -s -o /dev/null -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" -d chat_id="${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1"; }
 notify "🧠 МЕСЯЧНОЕ ПЕРЕОБУЧЕНИЕ (сервер): старт"
 (cd kg/panel_downloader && python3 -m kaggle kernels push -p . >/dev/null 2>&1)
