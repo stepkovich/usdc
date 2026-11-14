@@ -79,7 +79,8 @@ def tg(text: str) -> None:
         return
     try:
         data = urllib.parse.urlencode(
-            {"chat_id": chat, "text": text}).encode()
+            {"chat_id": chat, "text": text,
+             "parse_mode": "HTML"}).encode()
         urllib.request.urlopen(urllib.request.Request(
             f"https://api.telegram.org/bot{tok}/sendMessage", data=data),
             timeout=20)
@@ -454,15 +455,21 @@ def main():
         meta_lines = []
         if "meta_ok" in df.columns:
             mo = df[df["meta_ok"] == True]   # noqa: E712 (NaN-устойчиво)
+            mn = df[df["meta_ok"] == False]  # noqa: E712 (NaN — не вето)
             avg_mo = mo.pnl_bp.mean() if len(mo) else float("nan")
+            avg_mn = mn.pnl_bp.mean() if len(mn) else float("nan")
             d_meta = avg_mo - avg_all
             v_meta = verd(d_meta, 5)
             plain.append(f" | мета-да {len(mo)}: "
                          f"{avg_mo if len(mo) else float('nan'):+.1f}бп")
+            if len(mn):
+                plain.append(f" | мета-нет {len(mn)}: {avg_mn:+.1f}бп")
             meta_lines = ["",
                           "🤝 <b>Мета — «второе мнение»</b>:",
                           f"• подтверждено ею: {len(mo)} → "
                           f"<b>{avg_mo:+.1f} бп</b>",
+                          f"• завернуто ею: {len(mn)} → "
+                          f"{avg_mn:+.1f} бп",
                           f"• средний сигнал: {avg_all:+.1f} бп",
                           f"• вердикт: {v_meta}"]
         plain_sides, sides = [], []

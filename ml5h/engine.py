@@ -314,6 +314,14 @@ class Ml5hEngine:
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
         if self.day_pnl <= -day_cap:
+            # раз в день сообщаем владельцу, что кап сработал (лимит > 0 —
+            # при пустом балансе кап=0 ложно срабатывает и молчание штатно)
+            if day_cap > 0 and getattr(
+                    self, "_cap_fired_key", None) != self.day_key:
+                self._cap_fired_key = self.day_key
+                tg.fire(f"🛑 <b>Дневной кап достигнут</b>: день "
+                        f"{float(self.day_pnl):+.2f} USDT из лимита "
+                        f"{float(day_cap):.2f} — новые входы до 00:00 UTC")
             # кап: отменяем ещё висящие входные заявки (иначе лазейка —
             # заявка, поставленная до капа, исполняется после него)
             for psym, pend in list(self.pending.items()):

@@ -16,10 +16,12 @@ docker run --rm \
 SUM=$(cat /root/usdc/ops/judge/summary.txt 2>/dev/null)
 if [ -n "$SUM" ]; then
   curl -s -o /dev/null -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-    -d chat_id="${TELEGRAM_CHAT_ID}" --data-urlencode "text=$SUM"
+    -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML \
+    --data-urlencode "text=$SUM"
 fi
 # ФЛАГ ПЕРЕОБУЧЕНИЯ: бот просит пересмотр (30 сделок в минусе)
 if [ -f /root/usdc-real/data/signals/retrain_needed ]; then
   curl -s -o /dev/null -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-    -d chat_id="${TELEGRAM_CHAT_ID}" --data-urlencode "text=🧠⚠️ Флаг переобучения активен (30 сделок в минусе) — решение за владельцем"
+    -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=HTML \
+    --data-urlencode "text=🧠⚠️ Флаг переобучения активен (30 сделок в минусе) — решение за владельцем"
 fi
