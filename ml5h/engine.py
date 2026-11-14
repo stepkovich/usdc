@@ -105,6 +105,11 @@ class Ml5hEngine:
         if meta.get("gate"):
             self.c.gate = float(meta["gate"])
         self.model = lgb.Booster(model_file=str(self.c.model_path))
+        # метка времени загруженной модели: без неё первый же тик считает
+        # файл «новым», перезагружает и раздувает вселенную до паспорта
+        # (522 монеты вкл. делистнутые) — откатывая фильтр делистов (баг
+        # 14.11: вето делистнутых шторм-монет после каждого рестарта)
+        self._model_loaded_mtime = self._model_mtime()
         # калибровка (07.11): карта «сырая уверенность -> настоящий шанс».
         # Файл может отсутствовать — тогда работает сырой гейт 0.65.
         self._cal_x = self._cal_y = None
@@ -203,9 +208,12 @@ class Ml5hEngine:
                 self.feats = meta["features"]
                 if meta.get("gate"):
                     self.c.gate = float(meta["gate"])
-                new_syms = [s for s in (self.c.symbols or meta["symbols"])
-                            if s not in self.symbols]
-                self.symbols = self.c.symbols or meta["symbols"]
+                # вселенная после перезагрузки: паспорт МОДЕЛИ минус
+                # делистнутые (статус на бирже ≠ TRADING) — иначе после
+                # каждого рестарта мёртвые монеты возвращаются в работу
+                raw_syms = self.c.symbols or meta["symbols"]
+                self.symbols = [s for s in raw_syms if s in self.ex.filters]
+                new_syms = [s for s in self.symbols if s not in self.bars]
                 try:
                     cal = json.loads((self.c.model_path.parent
                                       / "calibration.json").read_text())
