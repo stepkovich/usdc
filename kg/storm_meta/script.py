@@ -122,8 +122,11 @@ del frames
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="M")
 data["month"] = q.astype(str)
 months = sorted(data["month"].unique())
-idx = np.linspace(0, len(months) - 1, 8).round().astype(int)
-test_q = [months[i] for i in idx]
+test_q = months[:]          # ПОЛНЫЙ проход: каждый месяц истории
+# (схема владельца 16.11, как в репетиции usdc-monthly-replay: тетрадь
+# меты наполняется сигналами ВСЕХ месяцев, каждый от своей модели)
+test_q = [m for m in test_q if m >= months[3]]   # ранние месяцы отсеет
+# guard len(trd)<500_000 внутри цикла, здесь не режем данные
 FEATS = ["ret_1", "ret_4", "ret_10", "ret_20", "h4_momentum",
          "atr_pct", "std_20", "skew", "vol_ratio", "taker_buy", "clv",
          "zscore", "rsi", "sma_cross", "btc_ret_10", "btc_ret_20",
