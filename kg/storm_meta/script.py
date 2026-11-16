@@ -1,10 +1,15 @@
-"""МЕТА-ПОДТВЕРЖДЕНИЕ БУРИ (v2, 16.11): месячная схема (владелец).
-Второе дерево учится на ИТОГАХ сигналов первого: тетрадь наполняется
-проходом по истории ШАГ ПО МЕСЯЦУ (8 экзаменационных месяцев по сетке,
-без подглядывания) — сигналы каждого месяца даёт модель, обученная на
-всём до него. Мета обучается на сигналах с фолда 2 (когда тетрадь
-набрала >=2000 записей) и всегда сохраняется как свежий meta.txt.
-Вердикт «кандидат/нет» в отчёте — справка о пользе замка, не гейт.
+"""МЕТА-ПОДТВЕРЖДЕНИЕ БУРИ (v10, 16.11): месячная схема (владелец).
+Тетрадь сигналов строится ПОЛНЫМ месячным проходом по всей истории
+(каждый месяц отвечает модель, обученная на всём до него), окно 5ч
+НЕПРЕРЫВНО через границы месяцев. Для каждого сигнала тетрадь хранит
+ПОЛНЫЙ набор исходов: движение 10 баров (цена->цена), биржевой стоп
+-15% (дошёл/не дошёл, выход), максимум в плюс/минус (насколько
+перешагнул), ФАНДИНГ за период удержания (ставки с зеркала, сторона),
+флаг исполнения лимитки. Тетрадь целиком сохраняется в notebook.csv —
+варианты обучения меты (метка «перешагнул без убытка», «насколько»,
+«чистыми после фандинга») считаются офлайн без новых проходов.
+Деплой-мета обучается как раньше (метка: выиграл 10 баров после
+издержек) для сопоставимости с v9. Вердикт «кандидат/нет» — справка.
 """
 import glob, io, json, time, zipfile, zlib
 import numpy as np, pandas as pd
@@ -12,6 +17,7 @@ import lightgbm as lgb
 
 t0 = time.time()
 H = 10
+STOP = 0.15
 GATE = 0.65
 COOLDOWN_MS = 10 * 1800_000
 FEE = 0.0010
@@ -111,6 +117,8 @@ for i, name in enumerate(members, 1):
     X["fwd"] = fwd.astype("float32")
     X["atr_rel"] = atr_rel.astype("float32")
     X["close"] = close
+    X["low"] = df["low"].values
+    X["high"] = df["high"].values
     X["ot"] = df["open_time"].values.astype(np.int64)
     X = X.replace([np.inf, -np.inf], np.nan)
     frames.append(X.dropna(subset=["atr_pct"]))
@@ -119,6 +127,24 @@ for i, name in enumerate(members, 1):
 
 data = pd.concat(frames, ignore_index=True)
 del frames
+# ФАНДИНГ: monthly-файлы с зеркала сложены панелью в funding/{sym}.csv
+FUND = {}
+for name in zf.namelist():
+    if name.startswith("funding/") and name.endswith(".csv"):
+        sym = name.split("/")[-1].replace("_funding.csv", "")
+        pts = []
+        for r in zf.read(name).decode().strip().split("\n")[1:]:
+            c = r.split(",")
+            try:
+                ct = int(float(c[0]))
+                if ct > 10 ** 14:
+                    ct //= 1000
+                pts.append((ct, float(c[1])))
+            except Exception:
+                pass
+        pts.sort()
+        FUND[zlib.crc32(sym.encode()) & 0xFFFF] = pts
+print(f"фандинг: {len(FUND)} монет | {time.time()-t0:.0f}с", flush=True)
 q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="M")
 data["month"] = q.astype(str)
 months = sorted(data["month"].unique())
@@ -136,14 +162,14 @@ MFEATS = FEATS + ["p_sig", "atr_rel"]
 print(f"строк {len(data)}, фолды {test_q} | {time.time()-t0:.0f}с",
       flush=True)
 
-def collect(d):
-    """OOS-сигналы фолда с полным вектором признаков для мета."""
+def collect(d, gate, last):
+    """OOS-сигналы месяца с ПОЛНЫМ набором полей для тетради.
+    last — общий словарь окна 5ч, непрерывный через все месяцы."""
     pools = {int(fi): gg.sort_values("ot") for fi, gg in d.groupby("sym_id")}
     sigs = []
     for side in (1, -1):
-        sel = d[(d["p"] > GATE) if side == 1 else (d["p"] < 1 - GATE)] \
+        sel = d[(d["p"] > gate) if side == 1 else (d["p"] < 1 - gate)] \
             .sort_values(["sym_id", "ot"])
-        last = {}
         for row in sel.itertuples():
             if row.ot - last.get(row.sym_id, -10**18) < COOLDOWN_MS:
                 continue
@@ -155,18 +181,58 @@ def collect(d):
             j = int(np.searchsorted(ots, row.ot))
             if j >= len(ots) or ots[j] != row.ot or j + H >= len(ots):
                 continue
-            base = side * float(row.fwd) - FEE
-            vec = [float(getattr(row, f)) for f in FEATS]
-            vec.append(float(row.p))
-            vec.append(float(row.atr_rel))
-            sigs.append({"vec": vec, "base": base, "side": side})
+            c = float(row.close)
+            seg_lo = pool["low"].values[j + 1: j + 1 + H]
+            seg_hi = pool["high"].values[j + 1: j + 1 + H]
+            filled = (seg_lo[0] <= c) if side == 1 else (seg_hi[0] >= c)
+            stop = c * (1 - STOP) if side == 1 else c * (1 + STOP)
+            hit = False
+            kex = H
+            for k in range(H):
+                if side == 1 and seg_lo[k] <= stop:
+                    hit, kex = True, k + 1
+                    break
+                if side == -1 and seg_hi[k] >= stop:
+                    hit, kex = True, k + 1
+                    break
+            exit_px = stop if hit else float(pool["close"].values[j + H])
+            exit_ret = side * (exit_px / c - 1) * 1e4
+            hi_e = side * (seg_hi.max() / c - 1) * 1e4
+            lo_e = side * (seg_lo.min() / c - 1) * 1e4
+            mfe = max(hi_e, lo_e)
+            mae = min(hi_e, lo_e)
+            # фандинг за период удержания: события (ot[j], конец удержания]
+            hold_end = int(pool["ot"].values[j + kex]) + 1_800_000
+            paid = 0.0
+            import bisect as _bs
+            fpts = FUND.get(int(row.sym_id), [])
+            if fpts:
+                lo_i = _bs.bisect_right(fpts, (row.ot, 10))
+                hi_i = _bs.bisect_right(fpts, (hold_end, 10))
+                for _t, _r in fpts[lo_i:hi_i]:
+                    paid += side * _r
+            paid *= 1e4
+            sigs.append({
+                "month": str(row.month), "sym_id": int(row.sym_id),
+                "side": side, "p": float(row.p),
+                "atr_rel": float(row.atr_rel),
+                "vec": [float(getattr(row, f)) for f in FEATS] +
+                       [float(row.p), float(row.atr_rel)],
+                "fwd_bp": side * float(row.fwd) * 1e4,
+                "exit_ret_bp": exit_ret, "stop_hit": hit,
+                "mfe_bp": float(mfe), "mae_bp": float(mae),
+                "filled": bool(filled), "hold_end_ms": hold_end,
+                "paid_bp": float(paid),
+                "base": side * float(row.fwd) - FEE})
     return sigs
+
 
 hist = []                       # OOS-сигналы прошлых фолдов для мета
 report = {"pre_reg": "КАНДИДАТ: пул фолдов 2..8: avg(принятые)−avg(все) "
                      ">= +3бп, n>=1000, avg(принятых)>0",
           "folds": {}}
 acc_all, all_all, n_acc_pool, acc_pool = [], [], 0, 0.0
+last_shared = {}          # окно 5ч НЕПРЕРЫВНО через все месяцы
 for k, qq in enumerate(test_q):
     trd = data[data["month"] < qq]
     ted = data[data["month"] == qq]
@@ -176,7 +242,7 @@ for k, qq in enumerate(test_q):
     trd_ok = trd.dropna(subset=["y"])
     m.fit(trd_ok[FEATS], trd_ok["y"], categorical_feature=["sym_id"])
     d = ted.assign(p=m.predict_proba(ted[FEATS])[:, 1])
-    sigs = collect(d)
+    sigs = collect(d, GATE, last_shared)
     allbp = [s["base"] for s in sigs]
     if k == 0 or len(hist) < 2000:
         acc = list(range(len(sigs)))       # фолд 1: без истории, контроль
@@ -233,6 +299,32 @@ try:
 except NameError:
     print("мета не обучалась ни на одном фолде — сохранять нечего",
           flush=True)
+
+# ТЕТРАДЬ ЦЕЛИКОМ: все сигналы прохода со всеми исходами — база
+# офлайн-лаб обучения меты (варианты метки: «перешагнул без убытка»,
+# «насколько», «чистыми после фандинга», балансировка, свежее окно)
+try:
+    rows_nb = []
+    for h in hist:
+        r = {"month": h["month"], "sym_id": h["sym_id"], "side": h["side"],
+             "p": h["p"], "atr_rel": h["atr_rel"],
+             "fwd_bp": round(h["fwd_bp"], 2),
+             "exit_ret_bp": round(h["exit_ret_bp"], 2),
+             "stop_hit": int(h["stop_hit"]),
+             "mfe_bp": round(h["mfe_bp"], 1),
+             "mae_bp": round(h["mae_bp"], 1),
+             "filled": int(h["filled"]),
+             "paid_bp": round(h["paid_bp"], 2),
+             "base": round(h["base"], 4)}
+        for f, vv in zip(MFEATS, h["vec"]):
+            r[f] = vv
+        rows_nb.append(r)
+    pd.DataFrame(rows_nb).to_csv("/kaggle/working/notebook.csv",
+                                 index=False)
+    print(f"notebook.csv сохранён: {len(rows_nb)} сигналов "
+          f"(все исходы + фандинг)", flush=True)
+except Exception as e:
+    print("тетрадь не сохранена:", str(e)[:120], flush=True)
 json.dump(report, open("/kaggle/working/report.json", "w"), indent=1,
           ensure_ascii=False)
 print("МЕТА-ПОДТВЕРЖДЕНИЕ ЗАВЕРШЕНО", flush=True)

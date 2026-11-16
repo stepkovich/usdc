@@ -25,6 +25,7 @@ EXTRA_DAYS = META.get("extra_days", [])  # дневные пакеты свеж�
 OUT = "/kaggle/working"
 BASE = "https://data.binance.vision/data/futures/um/monthly/klines/{sym}/30m/{sym}-30m-{month}.zip"
 BASE_D = "https://data.binance.vision/data/futures/um/daily/klines/{sym}/30m/{sym}-30m-{day}.zip"
+BASE_F = "https://data.binance.vision/data/futures/um/monthly/fundingRate/{sym}/{sym}-fundingRate-{month}.zip"
 
 
 errs = []
@@ -55,6 +56,21 @@ def get_symbol(args):
         z = zipfile.ZipFile(io.BytesIO(data))
         for name in z.namelist():
             rows.extend(z.read(name).decode().strip().split("\n"))
+    # ФАНДИНГ: месячные ставки за тот же период -> funding/{sym}.csv
+    fund = ["calc_time,rate"]
+    for m in MONTHS:
+        data = fetch(BASE_F.format(sym=sym, month=m))
+        if not data:
+            continue
+        try:
+            z = zipfile.ZipFile(io.BytesIO(data))
+            for name in z.namelist():
+                for r in z.read(name).decode().strip().split("\n")[1:]:
+                    c = r.split(",")
+                    if len(c) >= 3 and c[0] and c[2]:
+                        fund.append(",".join([c[0], c[2]]))
+        except Exception:
+            pass
     if not rows:
         print(f"{i}/{total} {sym}: пусто", flush=True)
         return None
@@ -67,8 +83,9 @@ def get_symbol(args):
         if ot > 10 ** 14:            # микросекунды -> миллисекунды
             ot //= 1000
         out.append(",".join([str(ot)] + c[1:]))
-    print(f"{i}/{total} {sym}: {len(clean)} строк", flush=True)
-    return (sym, "\n".join(out))
+    print(f"{i}/{total} {sym}: {len(clean)} строк, "
+          f"фандинг {len(fund)-1}", flush=True)
+    return (sym, "\n".join(out), "\n".join(fund))
 
 
 t0 = time.time()
@@ -78,8 +95,9 @@ with ThreadPoolExecutor(16) as ex:
 ok = [r for r in results if r]
 with zipfile.ZipFile(f"{OUT}/panel.zip", "w",
                      compression=zipfile.ZIP_DEFLATED) as z:
-    for sym, text in ok:
+    for sym, text, fund_text in ok:
         z.writestr(f"{sym}_30m.csv", text)
+        z.writestr(f"funding/{sym}_funding.csv", fund_text)
 print(f"ГОТОВО за {time.time() - t0:.0f}с: {len(ok)}/{len(SYMS)} монет -> "
       f"panel.zip", flush=True)
 if errs:
