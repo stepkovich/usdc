@@ -112,6 +112,21 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    def _fatal(kind, val, tb):
+        """Предсмертная записка: краш всегда в bot.log + ТГ (16.11:
+        две немые смерти — следы стёрлись с контейнером)."""
+        log.critical("ФАТАЛЬНО: %s: %s", kind.__name__, val,
+                     exc_info=(kind, val, tb))
+        try:
+            import bot.telegram as tg
+            if tg.TOKEN:
+                tg.fire(f"💥 <b>КРАШ</b>: {kind.__name__}: "
+                        f"{str(val)[:150]} — след в bot.log, "
+                        f"сторож поднимет")
+        except Exception:
+            pass
+
+    sys.excepthook = _fatal
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
