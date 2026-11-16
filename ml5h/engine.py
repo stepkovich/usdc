@@ -53,6 +53,8 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
+        # решётка оценок 5ч (кулдаун, «го» владельца 16.11): sym -> ms бара
+        self._eval_last: dict[str, int] = {}
         self.day_key = datetime.now(timezone.utc).date()
         self.balance = Decimal(0)
         # ЖУРНАЛ СДЕЛОК: источник для сигнала переобучения (последние 30
@@ -415,6 +417,20 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
+            # лабовая решётка 10 баров (5ч) — «го» владельца 16.11: один
+            # пункт оценки на 5-часовое окно, как во ВСЕХ замерах
+            # (afterstop / exit-model / once-a-day). Анкор = сама оценка
+            # (независимо от исхода), вето окно не заводит. Без этого бой
+            # перезаходил в монету каждые 30 минут (SOPH 14.11, RARE 16.11).
+            now_ms = int(self.bars[sym]["open_time"].iloc[-1])
+            last_ms = self._eval_last.get(sym, 0)
+            if now_ms - last_ms < self.c.bar_minutes * 60_000 * 10:
+                if p > self.c.gate or p < 1 - self.c.gate:
+                    log.info("%s: сигнал в окне кулдауна 5ч (%.1fч после "
+                             "предыдущей оценки) — пропущен", sym,
+                             (now_ms - last_ms) / 3_600_000)
+                continue
+            self._eval_last[sym] = now_ms
             if p > self.c.gate or p < 1 - self.c.gate:
                 if self.meta is not None and atr is not None \
                         and np.isfinite(atr):
