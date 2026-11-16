@@ -550,7 +550,7 @@
   "ZROUSDT",
   "ZRXUSDT"
  ],
- "gate": 0.65,
+ "gate": 0.59,
  "hold_bars": 10,
  "bar_minutes": 30,
  "label": "storm_05atr_both_sides",
