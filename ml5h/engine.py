@@ -417,12 +417,17 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
-            # лабовая решётка 10 баров (5ч) — «го» владельца 16.11: один
-            # пункт оценки на 5-часовое окно, как во ВСЕХ замерах
-            # (afterstop / exit-model / once-a-day). Анкор = сама оценка
-            # (независимо от исхода), вето окно не заводит. Без этого бой
-            # перезаходил в монету каждые 30 минут (SOPH 14.11, RARE 16.11).
-            now_ms = int(self.bars[sym]["open_time"].iloc[-1])
+            # канонические слоты осмотров (16.11): закрытие бара в
+            # 00/05/10/15/20 UTC — та же фаза, что во ВСЕХ замерах.
+            # Между слотами монета даже не оценивается (фичи не считаем).
+            # Якорь _eval_last (от входа усыновлённой позиции) страхует
+            # 10-баровый зазор после сделки.
+            ot_ms = int(self.bars[sym]["open_time"].iloc[-1])
+            close_ms = ot_ms + self.c.bar_minutes * 60_000
+            if close_ms % 3_600_000 != 0 \
+                    or (close_ms // 3_600_000) % 24 % 5 != 0:
+                continue
+            now_ms = ot_ms
             last_ms = self._eval_last.get(sym, 0)
             if now_ms - last_ms < self.c.bar_minutes * 60_000 * 10:
                 if p > self.c.gate or p < 1 - self.c.gate:
