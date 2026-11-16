@@ -878,6 +878,10 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
+                # решётка 5ч наследует ВРЕМЯ ВХОДА позиции (дыра 16.11,
+                # найдена владельцем: RARE перезаходилась через 12 мин
+                # после выхода, т.к. якорь после рестарта был пуст)
+                self._eval_last[sym] = int(own["ts"] * 1000)
                 await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
