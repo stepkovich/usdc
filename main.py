@@ -6,7 +6,7 @@
 
 Запуск: python main.py  (в Docker: CMD). Данные и исполнение —
 mainnet Binance futures. Сделки — в журнал и Telegram; часовая
-сводка — в журнал.
+сводка — в журнал
 """
 from __future__ import annotations
 
