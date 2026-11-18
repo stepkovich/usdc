@@ -53,6 +53,8 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
+        # жёсткий дневной кап: сработал хоть раз — торгуем только завтра
+        self._cap_latched = False
         self.day_key = datetime.now(timezone.utc).date()
         self.balance = Decimal(0)
         # ЖУРНАЛ СДЕЛОК: источник для сигнала переобучения (последние 30
@@ -291,6 +293,7 @@ class Ml5hEngine:
         if now.date() != self.day_key:
             self.day_key = now.date()
             self.day_pnl = Decimal(0)
+            self._cap_latched = False   # новый день — защёлка сброшена
             self.balance = await asyncio.to_thread(
                 self.ex.account_wallet_balance, "USDT")
         if time.time() - getattr(self, "_last_recon", 0) >= 600:
@@ -313,9 +316,10 @@ class Ml5hEngine:
         day_cap = (min(self.c.day_cap_usdc, self.balance * self.cfg.daily_cap_pct)
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
-        if self.day_pnl <= -day_cap:
+        if self._cap_latched or self.day_pnl <= -day_cap:
             # раз в день сообщаем владельцу, что кап сработал (лимит > 0 —
             # при пустом балансе кап=0 ложно срабатывает и молчание штатно)
+            self._cap_latched = True
             if day_cap > 0 and getattr(
                     self, "_cap_fired_key", None) != self.day_key:
                 self._cap_fired_key = self.day_key
