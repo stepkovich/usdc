@@ -53,12 +53,6 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
-        # решётка оценок 5ч (кулдаун, «го» владельца 16.11): sym -> ms бара
-        self._eval_last: dict[str, int] = {}
-        # гейт лимитов биржи (16.11, дыра 06.11): увидел -1003/429/418 —
-        # пауза запросов с удвоением, не падаем и не долбимся
-        self._rest_pause_until = 0.0
-        self._rest_pause_s = 120.0
         self.day_key = datetime.now(timezone.utc).date()
         self.balance = Decimal(0)
         # ЖУРНАЛ СДЕЛОК: источник для сигнала переобучения (последние 30
@@ -163,24 +157,8 @@ class Ml5hEngine:
 
     async def _warmup(self) -> None:
         for sym in self.symbols:
-            rows = None
-            for attempt in range(5):
-                try:
-                    rows = await asyncio.to_thread(
-                        self.ex.fetch_klines, sym, "30m",
-                        self.c.warmup_bars)
-                    break
-                except BinanceError as e:
-                    if self._limit_hit(e):
-                        self._rest_pause(e)
-                        await asyncio.sleep(max(
-                            1.0, self._rest_pause_until - time.time()))
-                        continue
-                    log.warning("%s: прогрев, биржа отказала (%s)",
-                                sym, str(e)[:60])
-                    break
-            if rows is None:
-                continue
+            rows = await asyncio.to_thread(
+                self.ex.fetch_klines, sym, "30m", self.c.warmup_bars)
             rows = rows[:-1]                      # последний бар ещё идёт
             if len(rows) < 300:
                 log.warning("%s: мало истории (%d)", sym, len(rows))
@@ -200,17 +178,8 @@ class Ml5hEngine:
     # ---------- цикл ----------
     async def run(self) -> None:
         while True:
-            if time.time() < self._rest_pause_until:
-                await asyncio.sleep(5)
-                continue
             try:
                 await self.tick()
-                self._rest_pause_s = max(120.0, self._rest_pause_s / 2)
-            except BinanceError as e:
-                if self._limit_hit(e):
-                    self._rest_pause(e)
-                else:
-                    log.exception("tick: биржа отказала")
             except Exception:
                 log.exception("tick")
             await asyncio.sleep(2)
@@ -220,27 +189,6 @@ class Ml5hEngine:
             return self.c.model_path.stat().st_mtime
         except Exception:
             return 0.0
-
-    def _limit_hit(self, e: BinanceError) -> bool:
-        """Коды лимитов/бана биржи: -1003 вес, 429 many, 418 бан IP."""
-        try:
-            return api_code(e) in (-1003, 429, 418)
-        except Exception:
-            return False
-
-    def _rest_pause(self, e: BinanceError) -> None:
-        """Пауза запросов с удвоением (120с -> до 30мин). Позиции под
-        защитой биржевых стопов — тишина в REST безопасна."""
-        now = time.time()
-        until = max(now, self._rest_pause_until) + self._rest_pause_s
-        self._rest_pause_until = until
-        log.warning("лимиты биржи (код %s): пауза запросов %.0fс "
-                    "(до %s UTC)", api_code(e), self._rest_pause_s,
-                    datetime.fromtimestamp(until, timezone.utc)
-                    .strftime("%H:%M:%S"))
-        tg.fire(f"⏳ Лимиты биржи (код {api_code(e)}): пауза запросов "
-                f"{self._rest_pause_s:.0f}с — не падаем, ждём")
-        self._rest_pause_s = min(self._rest_pause_s * 2, 1800.0)
 
     def _meta_mtime(self) -> float:
         try:
@@ -427,14 +375,8 @@ class Ml5hEngine:
 
     async def on_bar(self) -> None:
         for sym in self.symbols:
-            try:
-                rows = await asyncio.to_thread(
-                    self.ex.fetch_klines, sym, "30m", 3)
-            except BinanceError as e:
-                if self._limit_hit(e):
-                    self._rest_pause(e)
-                    return
-                raise
+            rows = await asyncio.to_thread(
+                self.ex.fetch_klines, sym, "30m", 3)
             if not rows:
                 continue
             rows = rows[:-1]
@@ -473,25 +415,6 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
-            # канонические слоты осмотров (16.11): закрытие бара в
-            # 00/05/10/15/20 UTC — та же фаза, что во ВСЕХ замерах.
-            # Между слотами монета даже не оценивается (фичи не считаем).
-            # Якорь _eval_last (от входа усыновлённой позиции) страхует
-            # 10-баровый зазор после сделки.
-            ot_ms = int(self.bars[sym]["open_time"].iloc[-1])
-            close_ms = ot_ms + self.c.bar_minutes * 60_000
-            if close_ms % 3_600_000 != 0 \
-                    or (close_ms // 3_600_000) % 24 % 5 != 0:
-                continue
-            now_ms = ot_ms
-            last_ms = self._eval_last.get(sym, 0)
-            if now_ms - last_ms < self.c.bar_minutes * 60_000 * 10:
-                if p > self.c.gate or p < 1 - self.c.gate:
-                    log.info("%s: сигнал в окне кулдауна 5ч (%.1fч после "
-                             "предыдущей оценки) — пропущен", sym,
-                             (now_ms - last_ms) / 3_600_000)
-                continue
-            self._eval_last[sym] = now_ms
             if p > self.c.gate or p < 1 - self.c.gate:
                 if self.meta is not None and atr is not None \
                         and np.isfinite(atr):
@@ -939,10 +862,6 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
-                # решётка 5ч наследует ВРЕМЯ ВХОДА позиции (дыра 16.11,
-                # найдена владельцем: RARE перезаходилась через 12 мин
-                # после выхода, т.к. якорь после рестарта был пуст)
-                self._eval_last[sym] = int(own["ts"] * 1000)
                 await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
