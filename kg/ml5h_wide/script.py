@@ -14,7 +14,6 @@ import numpy as np, pandas as pd, lightgbm as lgb
 t0 = time.time()
 H = 10
 GATE = 0.65
-COOLDOWN_MS = 10 * 1800_000
 SLIP, TAKER_FEE, MAKER_FEE = 0.0005, 0.0005, 0.0002
 PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
               subsample=0.8, colsample_bytree=0.8, random_state=42,
@@ -137,15 +136,25 @@ print(f"строк {len(data)}, тест {test_q} | {time.time()-t0:.0f}с",
 
 def collect(d):
     pools = {int(fi): gg.sort_values("ot") for fi, gg in d.groupby("sym_id")}
+    # ПОДТВЕРЖДЕНИЕ (синхронно с боем 23.11, правило владельца): сигнал
+    # учитывается только если у той же монеты на ПРЕДЫДУЩЕМ баре порог
+    # тоже был пройден в ту же сторону (два бара подряд)
+    ps_ = d["p"].values
+    sy_ = d["sym_id"].values
+    ot_ = d["ot"].values
+    gate_ok = (ps_ > GATE) | (ps_ < 1 - GATE)
+    sides_ = np.where(ps_ > GATE, 1, -1)
+    prev_side = {(int(sy), int(t)): int(sd)
+                 for sy, t, sd in zip(sy_[gate_ok], ot_[gate_ok],
+                                      sides_[gate_ok])}
     rows = []
     for side in (1, -1):
         sel = d[(d["p"] > GATE) if side == 1 else (d["p"] < 1 - GATE)] \
             .sort_values(["sym_id", "ot"])
-        last = {}
         for row in sel.itertuples():
-            if row.ot - last.get(row.sym_id, -10**18) < COOLDOWN_MS:
+            if prev_side.get((int(row.sym_id),
+                              int(row.ot) - 1800_000)) != side:
                 continue
-            last[row.sym_id] = row.ot
             pool = pools.get(int(row.sym_id))
             if pool is None:
                 continue

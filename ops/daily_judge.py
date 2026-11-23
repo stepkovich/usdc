@@ -274,8 +274,10 @@ def signals_and_rows(day: date):
             X["sym_id"] = float(sym_id(sym))
         if not set(FEATS).issubset(X.columns):
             continue                      # как feature_row: нет колонок -> None
-        mask = day_mask = (df["open_time"].values >= D0) & \
-                          (df["open_time"].values < D1)
+        # день + последний бар предыдущего дня (для цепи подтверждения,
+        # синхронно с боем 23.11: сигнал = порог пройден два бара подряд)
+        mask = (df["open_time"].values >= D0 - 1800_000) & \
+               (df["open_time"].values < D1)
         sub = df[mask]
         Xd = X[mask]
         if len(sub) == 0:
@@ -289,12 +291,13 @@ def signals_and_rows(day: date):
         ots = sub["open_time"].values[ok]
         atrs = Xd["atr_pct"].values[ok]
         vecs = np.column_stack([M, p, atrs])
-        rows.extend((sym, int(o), float(pp), float(a), float(c), v)
+        rows.extend((sym, int(o), float(pp), float(a), float(c), v,
+                     int(o) < D0)
                     for o, pp, a, c, v
                     in zip(ots, p, atrs, closes, vecs))
     # живая терциль ATR по вселенной каждого бара
     by_bar = {}
-    for sym, ot, p, atr, c, v in rows:
+    for sym, ot, p, atr, c, v, prevday in rows:
         if np.isfinite(atr):
             by_bar.setdefault(ot, []).append(atr)
     q33 = {ot: float(np.quantile(v, 1 / 3)) for ot, v in by_bar.items()
@@ -323,27 +326,38 @@ def main():
     tdir.mkdir(exist_ok=True)
     (tdir / f"{D}.json").write_text(json.dumps(
         sorted(top100), indent=0))
-    # cooldown 10 баров на символ, как в бою
+    # ПОДТВЕРЖДЕНИЕ (синхронно с боем 23.11, правило владельца): сигнал
+    # записывается только если сырой порог пройден два бара ПОДРЯД в одну
+    # сторону; первый бар дня подтверждается последним баром предыдущего
+    D0_ms = int(datetime(D.year, D.month, D.day,
+                         tzinfo=timezone.utc).timestamp() * 1000)
     rows.sort(key=lambda r: r[1])
-    last_sig = {}
+    prev = {}
     signals = []
-    for sym, ot, p, atr, c, vec in rows:
-        if ot - last_sig.get(sym, -10**18) >= 10 * 1800_000 \
-                and (p > GATE or p < 1 - GATE):
-            side = 1 if p > GATE else -1
-            in_f = np.isfinite(atr) and q33.get(ot) is not None \
-                and atr >= q33[ot]
-            s = {"sym": sym, "ot": ot, "side": side,
-                 "p": round(p, 4), "atr": atr,
-                 "in_filter": bool(in_f), "day": str(D),
-                 "top100": sym in top100,
-                 "vec": [round(float(x), 6) for x in vec]}
-            if meta_model is not None:
-                pw = float(meta_model.predict(np.array([vec]))[0])
-                s["pw"] = round(pw, 4)
-                s["meta_ok"] = bool(pw >= 0.5)
-            signals.append(s)
-            last_sig[sym] = ot
+    for sym, ot, p, atr, c, vec, prevday in rows:
+        gate = p > GATE or p < 1 - GATE
+        side = 1 if p > GATE else -1
+        if not gate:
+            prev.pop(sym, None)
+            continue
+        if prevday:                       # бар прошлого дня — только цепь
+            prev[sym] = (ot, side)
+            continue
+        if prev.get(sym, (None, None)) != (ot - 1800_000, side):
+            prev[sym] = (ot, side)
+            continue                      # ждёт подтверждения
+        in_f = np.isfinite(atr) and q33.get(ot) is not None \
+            and atr >= q33[ot]
+        s = {"sym": sym, "ot": ot, "side": side,
+             "p": round(p, 4), "atr": atr,
+             "in_filter": bool(in_f), "day": str(D),
+             "top100": sym in top100,
+             "vec": [round(float(x), 6) for x in vec]}
+        if meta_model is not None:
+            pw = float(meta_model.predict(np.array([vec]))[0])
+            s["pw"] = round(pw, 4)
+            s["meta_ok"] = bool(pw >= 0.5)
+        signals.append(s)
     sg_path = JDIR / "signals.jsonl"
     seen = set()
     if sg_path.exists():

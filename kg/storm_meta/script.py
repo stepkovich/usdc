@@ -19,7 +19,6 @@ t0 = time.time()
 H = 10
 STOP = 0.15
 GATE = 0.65
-COOLDOWN_MS = 10 * 1800_000
 FEE = 0.0010
 META_PARAMS = dict(n_estimators=120, learning_rate=0.05, max_depth=3,
                    num_leaves=7, subsample=0.8, colsample_bytree=0.8,
@@ -162,18 +161,28 @@ MFEATS = FEATS + ["p_sig", "atr_rel"]
 print(f"строк {len(data)}, фолды {test_q} | {time.time()-t0:.0f}с",
       flush=True)
 
-def collect(d, gate, last):
+def collect(d, gate):
     """OOS-сигналы месяца с ПОЛНЫМ набором полей для тетради.
-    last — общий словарь окна 5ч, непрерывный через все месяцы."""
+    ПОДТВЕРЖДЕНИЕ (синхронно с боем 23.11, правило владельца): сигнал
+    учитывается только если у той же монеты на ПРЕДЫДУЩЕМ баре порог
+    тоже был пройден в ту же сторону (два бара подряд)."""
     pools = {int(fi): gg.sort_values("ot") for fi, gg in d.groupby("sym_id")}
+    ps_ = d["p"].values
+    sy_ = d["sym_id"].values
+    ot_ = d["ot"].values
+    gate_ok = (ps_ > gate) | (ps_ < 1 - gate)
+    sides_ = np.where(ps_ > gate, 1, -1)
+    prev_side = {(int(sy), int(t)): int(sd)
+                 for sy, t, sd in zip(sy_[gate_ok], ot_[gate_ok],
+                                      sides_[gate_ok])}
     sigs = []
     for side in (1, -1):
         sel = d[(d["p"] > gate) if side == 1 else (d["p"] < 1 - gate)] \
             .sort_values(["sym_id", "ot"])
         for row in sel.itertuples():
-            if row.ot - last.get(row.sym_id, -10**18) < COOLDOWN_MS:
+            if prev_side.get((int(row.sym_id),
+                              int(row.ot) - 1800_000)) != side:
                 continue
-            last[row.sym_id] = row.ot
             pool = pools.get(int(row.sym_id))
             if pool is None:
                 continue
@@ -232,7 +241,6 @@ report = {"pre_reg": "КАНДИДАТ: пул фолдов 2..8: avg(приня
                      ">= +3бп, n>=1000, avg(принятых)>0",
           "folds": {}}
 acc_all, all_all, n_acc_pool, acc_pool = [], [], 0, 0.0
-last_shared = {}          # окно 5ч НЕПРЕРЫВНО через все месяцы
 for k, qq in enumerate(test_q):
     trd = data[data["month"] < qq]
     ted = data[data["month"] == qq]
@@ -242,7 +250,7 @@ for k, qq in enumerate(test_q):
     trd_ok = trd.dropna(subset=["y"])
     m.fit(trd_ok[FEATS], trd_ok["y"], categorical_feature=["sym_id"])
     d = ted.assign(p=m.predict_proba(ted[FEATS])[:, 1])
-    sigs = collect(d, GATE, last_shared)
+    sigs = collect(d, GATE)
     allbp = [s["base"] for s in sigs]
     if k == 0 or len(hist) < 2000:
         acc = list(range(len(sigs)))       # фолд 1: без истории, контроль
