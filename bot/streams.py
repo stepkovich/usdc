@@ -64,7 +64,14 @@ class MarketStreams:
             try:
                 if hasattr(data, "model_dump"):
                     data = data.model_dump(by_alias=True)
-                k = data.get("k") if isinstance(data, dict) else None
+                if not isinstance(data, dict):
+                    return
+                k = data.get("k")
+                if not isinstance(k, dict):
+                    # обёртка комбинированного потока {stream, data}: свеча
+                    # лежит уровнем ниже (коннектор без модели отдаёт её как есть)
+                    inner = data.get("data")
+                    k = inner.get("k") if isinstance(inner, dict) else None
                 if not isinstance(k, dict):
                     return
                 self.last_event = time.time()
