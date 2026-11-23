@@ -76,7 +76,7 @@ class ML5HConfig(BaseModel):
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
     quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
-    meta_gate: bool = False                        # мета-подтверждение (12.10, идея владельца)
+    meta_gate: bool = True                         # мета ВСЕГДА в бою (правило владельца 01.11; дефолт False исправлен 23.11: потеря env-строки молча снимала второе мнение)
     gate_true: float = 0.60                        # настоящий шанс для входа (после калибровки)
     taker_fallback: bool = False                   # демо: мейкер не взялся за TTL -> вход по рынку
     meta_model_path: Path = ROOT / "data" / "models" / "meta.txt"
@@ -104,7 +104,7 @@ class LobConfig(BaseModel):
     risk_usdc: Decimal = Decimal("0")              # риск НА СДЕЛКУ в деньгах (0 = процентный)
     day_cap_usdc: Decimal = Decimal("0")           # дневной кап в деньгах (0 = процентный)
     quiet_filter: bool = True                      # фильтр «тихая треть» (рентген 12.10)
-    meta_gate: bool = False                        # мета-подтверждение (12.10, идея владельца)
+    meta_gate: bool = True                         # мета ВСЕГДА в бою (LOB: тот же принцип)
     gate_true: float = 0.60                        # настоящий шанс для входа (после калибровки)
     taker_fallback: bool = False                   # демо: мейкер не взялся за TTL -> вход по рынку
     meta_model_path: Path = ROOT / "data" / "models" / "meta.txt"

@@ -53,6 +53,12 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
+        # решётка оценок 5ч (кулдаун, «го» владельца 16.11, возврат 23.11):
+        # sym -> ms открытия последнего оценённого бара; один пункт оценки
+        # на 5-часовое окно, как во ВСЕХ замерах и у судьи
+        self._eval_last: dict[str, int] = {}
+        # журнал висящих заявок: переживает рестарт (дыра помощника 23.11)
+        self._pending_path = self.cfg.data_dir / "pending.json"
         # жёсткий дневной кап: сработал хоть раз — торгуем только завтра
         self._cap_latched = False
         self.day_key = datetime.now(timezone.utc).date()
@@ -141,6 +147,8 @@ class Ml5hEngine:
             except Exception as e:
                 log.warning("мета: не загрузилась (%s) — торгую без неё",
                             str(e)[:80])
+                tg.fire(f"🚨 <b>МЕТА НЕ ЗАГРУЗИЛАСЬ</b> — бот торгует без "
+                        f"второго мнения: {str(e)[:100]}")
         # биржа — источник правды: символы, которых нет на демо, отсеиваем
         await asyncio.to_thread(self.ex.build_filters, self.symbols)
         live = [s for s in self.symbols if s in self.ex.filters]
@@ -154,6 +162,19 @@ class Ml5hEngine:
         self.balance = await asyncio.to_thread(
             self.ex.account_wallet_balance, "USDT")
         await self._warmup()
+        # висящие заявки с диска (дыра помощника 23.11: рестарт во время
+        # живой заявки терял её из виду до ближайшей реконсиляции)
+        try:
+            if self._pending_path.exists():
+                restored = json.loads(self._pending_path.read_text())
+                for sym, p_ in restored.items():
+                    p_["qty"] = Decimal(str(p_["qty"]))
+                    self.pending[sym] = p_
+                if self.pending:
+                    log.info("pending восстановлен с диска: %s",
+                             list(self.pending))
+        except Exception:
+            log.exception("pending: восстановление не удалось")
         log.info("тёплый старт: %d/%d символов, баланс %s USDT",
                  len(self.bars), len(self.symbols), self.balance)
 
@@ -256,6 +277,8 @@ class Ml5hEngine:
                          .strftime("%H:%M UTC"))
             except Exception as e:
                 log.warning("перезагрузка меты не удалась: %s", e)
+                tg.fire(f"🚨 <b>МЕТА: перезагрузка не удалась</b> — живёт "
+                        f"предыдущая версия: {str(e)[:100]}")
 
     async def _refresh_day_xchg(self) -> None:
         """БИРЖА — ИСТОЧНИК ПРАВДЫ (владелец, 15.10): день = ВСЕ потоки
@@ -269,15 +292,34 @@ class Ml5hEngine:
         try:
             midnight = int(datetime.now(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-            r = await asyncio.to_thread(
-                self.ex.client.rest_api.get_income_history,
-                start_time=midnight, limit=1000)
-            inst = getattr(r.data(), "actual_instance", r.data())
-            rows_l = inst if isinstance(inst, list) else []
-            # день = торговля (сделки+комиссии+фандинг); переводы —
-            # движение денег, не заработок, иначе пополнение картинка дня
-            s = sum(float(getattr(x, "income", 0) or 0) for x in rows_l
-                    if getattr(x, "income_type", "") != "TRANSFER")
+            # ПОСТРАНИЧНО (дыра помощника 23.11: активный день >1000
+            # записей — одиночный запрос занижал день и кап опаздывал)
+            seen_keys = set()
+            s = 0.0
+            page_start = midnight
+            for _page in range(20):          # гард от вечного цикла
+                r = await asyncio.to_thread(
+                    self.ex.client.rest_api.get_income_history,
+                    start_time=page_start, limit=1000)
+                inst = getattr(r.data(), "actual_instance", r.data())
+                rows_l = inst if isinstance(inst, list) else []
+                page_max = 0
+                for x in rows_l:
+                    ts_x = int(getattr(x, "time", 0) or 0)
+                    it = str(getattr(x, "income_type", "") or "")
+                    inc = str(getattr(x, "income", "") or "")
+                    key = (ts_x, it, inc)
+                    if key in seen_keys or ts_x < midnight:
+                        continue
+                    seen_keys.add(key)
+                    page_max = max(page_max, ts_x)
+                    # день = торговля (сделки+комиссии+фандинг); переводы —
+                    # движение денег, не заработок
+                    if it != "TRANSFER":
+                        s += float(getattr(x, "income", 0) or 0)
+                if len(rows_l) < 1000 or page_max <= page_start:
+                    break
+                page_start = page_max
             self._day_xchg = Decimal(str(round(s, 6)))
         except Exception as e:
             log.warning("день с биржи не получен (%s) — счёт локальный",
@@ -332,6 +374,7 @@ class Ml5hEngine:
                 await asyncio.to_thread(self.ex.cancel_order, psym,
                                         pend["oid"])
                 self.pending.pop(psym, None)
+                self._save_pending()
                 log.info("%s: входная заявка отменена (дневной кап)", psym)
             await self.manage()
             return
@@ -419,6 +462,21 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
+            # лабовая решётка 10 баров (5ч) — «го» владельца 16.11, возврат
+            # 23.11: один пункт оценки на 5-часовое окно, как во ВСЕХ замерах
+            # (afterstop / exit-model / once-a-day / cd-trio) и у судьи.
+            # Анкор = сама оценка (независимо от исхода), вето окно не
+            # заводит. Без этого бой перезаходил в монету каждые 30 минут
+            # (SOPH 14.11, RARE 16.11); cd-trio: +65бп с решёткой vs +48.8 без
+            now_ms = int(self.bars[sym]["open_time"].iloc[-1])
+            last_ms = self._eval_last.get(sym, 0)
+            if now_ms - last_ms < self.c.bar_minutes * 60_000 * 10:
+                if p > self.c.gate or p < 1 - self.c.gate:
+                    log.info("%s: сигнал в окне кулдауна 5ч (%.1fч после "
+                             "предыдущей оценки) — пропущен", sym,
+                             (now_ms - last_ms) / 3_600_000)
+                continue
+            self._eval_last[sym] = now_ms
             if p > self.c.gate or p < 1 - self.c.gate:
                 if self.meta is not None and atr is not None \
                         and np.isfinite(atr):
@@ -596,6 +654,14 @@ class Ml5hEngine:
         cap = int(avail // margin_one)
         return max(cap, len(self.pos) + len(self.pending), 0)
 
+    def _save_pending(self) -> None:
+        try:
+            tmp = self._pending_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.pending, default=str))
+            tmp.replace(self._pending_path)
+        except Exception:
+            log.exception("pending: сохранение не удалось")
+
     async def open_long(self, sym: str, p: float) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
         if not top:
@@ -630,6 +696,7 @@ class Ml5hEngine:
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": bb, "p": p,
                              "ts": time.time(), "side": "LONG"}
+        self._save_pending()
         log.info("%s: GTX-вход выставлен @%s qty=%s p=%.3f", sym, bb, qty, p)
 
     async def open_short(self, sym: str, p: float) -> None:
@@ -667,6 +734,7 @@ class Ml5hEngine:
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": ba, "p": p,
                              "ts": time.time(), "side": "SHORT"}
+        self._save_pending()
         log.info("%s: GTX-шорт выставлен @%s qty=%s p=%.3f", sym, ba, qty, p)
 
     async def close_short(self, sym: str, pos: dict, maker: bool) -> None:
@@ -866,6 +934,10 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
+                # решётка 5ч наследует ВРЕМЯ ВХОДА позиции (дыра 16.11,
+                # найдена владельцем: RARE перезаходилась через 12 мин
+                # после выхода, т.к. якорь после рестарта был пуст)
+                self._eval_last[sym] = int(own["ts"] * 1000)
                 await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
@@ -922,12 +994,14 @@ class Ml5hEngine:
                                      "entry_ts": time.time(),
                                      "maker_entry": True}
                     self.pending.pop(sym, None)
+                    self._save_pending()
                     await self.place_stop(sym, self.pos[sym])
                     tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
                     continue
                 self.pending.pop(sym, None)
+                self._save_pending()
                 info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                                pend["oid"])
                 exq = Decimal(str((info or {}).get("executedQty") or 0))
@@ -937,6 +1011,9 @@ class Ml5hEngine:
                     self.pos[sym] = {"qty": exq, "px": px,
                                      "entry_ts": time.time(),
                                      "maker_entry": True, "partial": True}
+                    # страховка ДО закрытия (пакет брони 23.11): частичная
+                    # позиция ни секунды не живёт без биржевого стопа
+                    await self.place_stop(sym, self.pos[sym])
                     tg.fire(f"🟡 <b>ML5 {sym} "
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"частичный вход {exq} @ {px}")
@@ -974,6 +1051,7 @@ class Ml5hEngine:
             if (info or {}).get("status") == "FILLED":
                 px = float((info or {}).get("avgPrice") or pend["px"])
                 self.pending.pop(sym, None)
+                self._save_pending()
                 self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
                                  "maker_entry": True,
                                  "side": pend.get("side", "LONG")}
