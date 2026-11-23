@@ -1058,12 +1058,22 @@ class Ml5hEngine:
             log.exception("поток: событие заявки не обработано")
 
     async def _finish_ws_entry(self, sym: str) -> None:
-        """Мгновенный стоп и ТГ при исполнении из потока."""
+        """Мгновенный стоп и ТГ при исполнении из потока. Стоп ставится
+        тем же биржевым ордером (REST new_algo_order, боевой проверенный
+        путь); после постановки — проверка наличия на бирже, иначе крик
+        (цикл брони в manage дозакажет на следующем обороте)."""
         try:
             pos = self.pos.get(sym)
             if pos is None:
                 return
             await self.place_stop(sym, pos)
+            if "sl_oid" not in pos:
+                existing = await asyncio.to_thread(self.ex.find_own_stop, sym)
+                if existing is not None:
+                    pos["sl_oid"] = existing
+                else:
+                    tg.fire(f"⚠️ <b>ML5 {sym}</b>: стоп не встал при входе — "
+                            f"броня дозакажет в цикле")
             side = "ШОРТ" if pos.get("side") == "SHORT" else "ЛОНГ"
             tg.fire(f"🟢 <b>ML5 ВХОД {sym} {side}</b> "
                     f"{pos['qty']} @ {pos['px']} (мейкер) p={pos.get('p', 0):.2f}")
