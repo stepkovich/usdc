@@ -144,7 +144,7 @@ class MarketStreams:
         ws = self._client.websocket_streams
         await ws.create_connection()          # пул: market/public/private
         for event in ("reconnect", "close", "error"):
-            self._client.on_connection(event, self._conn_event(event))
+            ws.on_connection(event, self._conn_event(event))
 
         streams = [f"{s.lower()}@kline_30m" for s in self.symbols]
         await ws.subscribe(streams=streams, stream_url="market")
