@@ -1,0 +1,13 @@
+{
+ "id": "sewerted/usdc-battle-full",
+ "title": "usdc-battle-full",
+ "code_file": "script.py",
+ "language": "python",
+ "kernel_type": "script",
+ "is_private": "true",
+ "enable_gpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": ["sewerted/usdc-battle-models"],
+ "kernel_sources": ["sewerted/usdc-panel-downloader"],
+ "model_sources": []
+}

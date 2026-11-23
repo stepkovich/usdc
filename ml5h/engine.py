@@ -53,10 +53,11 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
-        # решётка оценок 5ч (кулдаун, «го» владельца 16.11, возврат 23.11):
-        # sym -> ms открытия последнего оценённого бара; один пункт оценки
-        # на 5-часовое окно, как во ВСЕХ замерах и у судьи
-        self._eval_last: dict[str, int] = {}
+        # цепь подтверждения (идея владельца 23.11, победитель замера
+        # четырёх машин usdc-battle-replay: +34.3бп/сд, +859 на сотне):
+        # sym -> (ms бара, сторона) последнего сырого сигнала; вход
+        # только когда сигнал продержался два бара подряд в одну сторону
+        self._sig_prev: dict[str, tuple[int, int]] = {}
         # журнал висящих заявок: переживает рестарт (дыра помощника 23.11)
         self._pending_path = self.cfg.data_dir / "pending.json"
         # жёсткий дневной кап: сработал хоть раз — торгуем только завтра
@@ -470,21 +471,27 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
-            # лабовая решётка 10 баров (5ч) — «го» владельца 16.11, возврат
-            # 23.11: один пункт оценки на 5-часовое окно, как во ВСЕХ замерах
-            # (afterstop / exit-model / once-a-day / cd-trio) и у судьи.
-            # Анкор = сама оценка (независимо от исхода), вето окно не
-            # заводит. Без этого бой перезаходил в монету каждые 30 минут
-            # (SOPH 14.11, RARE 16.11); cd-trio: +65бп с решёткой vs +48.8 без
+            # ПОДТВЕРЖДЕНИЕ («го» владельца 23.11, победитель замера из
+            # четырёх машин usdc-battle-replay v2/v3/v4/v5: +34.3бп/сд,
+            # +859 на сотне против +807 без паузы и +429 у решётки):
+            # смотрим каждую монету каждый бар, но вход только если
+            # сырой сигнал продержался два бара ПОДРЯД в одну сторону.
+            # Случайная вспышка не доживает до второго бара — фильтр
+            # отрезает её; шторм живёт дольше и проходит. Пока по монете
+            # открыта сделка/заявка — она не осматривается (цепь замрет).
             now_ms = int(self.bars[sym]["open_time"].iloc[-1])
-            last_ms = self._eval_last.get(sym, 0)
-            if now_ms - last_ms < self.c.bar_minutes * 60_000 * 10:
-                if p > self.c.gate or p < 1 - self.c.gate:
-                    log.info("%s: сигнал в окне кулдауна 5ч (%.1fч после "
-                             "предыдущей оценки) — пропущен", sym,
-                             (now_ms - last_ms) / 3_600_000)
-                continue
-            self._eval_last[sym] = now_ms
+            gate_now = p > self.c.gate or p < 1 - self.c.gate
+            side_now = 1 if p > self.c.gate else -1
+            if not gate_now:
+                self._sig_prev.pop(sym, None)
+            else:
+                confirmed = self._sig_prev.get(sym) == (now_ms - 1_800_000,
+                                                        side_now)
+                self._sig_prev[sym] = (now_ms, side_now)
+                if not confirmed:
+                    log.info("%s: сигнал ждёт подтверждения — вход на "
+                             "следующем баре, если повторится", sym)
+                    continue
             if p > self.c.gate or p < 1 - self.c.gate:
                 if self.meta is not None and atr is not None \
                         and np.isfinite(atr):
@@ -942,10 +949,9 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
-                # решётка 5ч наследует ВРЕМЯ ВХОДА позиции (дыра 16.11,
-                # найдена владельцем: RARE перезаходилась через 12 мин
-                # после выхода, т.к. якорь после рестарта был пуст)
-                self._eval_last[sym] = int(own["ts"] * 1000)
+                # после рестарта цепь подтверждения чистая: монете нужен
+                # заново сигнал двух баров подряд (консервативно)
+                self._sig_prev.pop(sym, None)
                 await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
