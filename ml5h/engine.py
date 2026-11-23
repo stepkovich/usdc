@@ -161,6 +161,14 @@ class Ml5hEngine:
             await asyncio.to_thread(self.ex.setup_symbol, s)
         self.balance = await asyncio.to_thread(
             self.ex.account_wallet_balance, "USDT")
+        import os as _os
+        _ver = _os.environ.get("BOT_VERSION", "")
+        tg.fire(f"🟢 <b>ML5 бот запущен</b>{' · ' + _ver if _ver else ''}: "
+                f"{len(self.c.symbols) or len(self.symbols)} монет в паспорте | "
+                f"gate {self.c.gate:.2f} | "
+                f"честный гейт {'ВЫКЛ' if self.c.gate_true <= 0 else '≥' + str(self.c.gate_true)} | "
+                f"решётка 5ч вкл | мета {'вкл' if self.meta else '⚠️ НЕТ'} | "
+                f"стол {self.c.max_slots} | стоп −15% на бирже | кап дня 4%")
         await self._warmup()
         # висящие заявки с диска (дыра помощника 23.11: рестарт во время
         # живой заявки терял её из виду до ближайшей реконсиляции)
