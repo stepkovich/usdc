@@ -28,6 +28,7 @@ from binance_common.errors import Error as BinanceError
 from bot.executor import api_code
 
 import bot.telegram as tg
+from bot.streams import MarketStreams, UserStreams
 from ml5h.features import feature_row
 
 log = logging.getLogger("ml5h")
@@ -53,6 +54,10 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
+        # ПОТОКИ (ветка ws): свечи и события пользователя через вебсокеты;
+        # None = REST-режим (запасной обход)
+        self.streams = None
+        self.user_feed = None
         # цепь подтверждения (идея владельца 23.11, победитель замера
         # четырёх машин usdc-battle-replay: +34.3бп/сд, +859 на сотне):
         # sym -> (ms бара, сторона) последнего сырого сигнала; вход
@@ -184,6 +189,20 @@ class Ml5hEngine:
                              list(self.pending))
         except Exception:
             log.exception("pending: восстановление не удалось")
+        # ПОТОКИ (ветка ws): свечи 30м всех монет, лучшие цены, исполнения.
+        # Не стартовали — бот живёт в REST-режиме (запасной обход в on_bar)
+        try:
+            self.streams = MarketStreams(self.symbols)
+            await self.streams.start()
+            self.user_feed = UserStreams(self.cfg.api_key,
+                                         self.cfg.exec_rest_url)
+            self.user_feed.on_order_update = self._on_ws_order
+            self.user_feed.on_balance_update = self._on_ws_balance
+            await self.user_feed.start()
+        except Exception:
+            log.exception("потоки не стартовали — бот в REST-режиме")
+            self.streams = None
+            self.user_feed = None
         log.info("тёплый старт: %d/%d символов, баланс %s USDT",
                  len(self.bars), len(self.symbols), self.balance)
 
@@ -430,25 +449,46 @@ class Ml5hEngine:
         log.info("прогрев завершён: %d символов в работе", len(self.bars))
 
     async def on_bar(self) -> None:
-        for sym in self.symbols:
-            rows = await asyncio.to_thread(
-                self.ex.fetch_klines, sym, "30m", 3)
-            if not rows:
-                continue
-            rows = rows[:-1]
-            r = rows[-1]
-            df = self.bars.get(sym)
-            if df is None:
-                continue
-            if int(r[0]) <= int(df["open_time"].iloc[-1]):
-                continue              # бар уже есть
-            new = pd.DataFrame([r], columns=KLINE_COLS)
-            for c in ("open", "high", "low", "close", "volume",
-                      "quote_volume", "taker_buy_base"):
-                new[c] = pd.to_numeric(new[c], errors="coerce")
-            new["open_time"] = new["open_time"].astype(np.int64)
-            new.index = pd.to_datetime(new["open_time"], unit="ms")
-            self.bars[sym] = pd.concat([df, new])[-1200:]
+        t0 = time.time()
+        bar_ms = self.c.bar_minutes * 60_000
+        # бар, открывшийся на последней границе (закрылся только что)
+        fresh_open = (int(time.time() * 1000) // bar_ms) * bar_ms - bar_ms
+        via = "поток"
+        if self.streams is not None and self.streams.healthy():
+            # ПОТОК: закрытые свечи уже в памяти — раскладываем по таблице
+            missing = []
+            for sym in self.symbols:
+                df = self.bars.get(sym)
+                if df is None:
+                    continue
+                bar = self.streams.closed_bar(sym, fresh_open)
+                if bar is None:
+                    missing.append(sym)
+                    continue
+                if int(df["open_time"].iloc[-1]) >= bar["open_time"]:
+                    continue              # бар уже есть
+                new = pd.DataFrame([[
+                    bar["open_time"], bar["open"], bar["high"], bar["low"],
+                    bar["close"], bar["volume"], 0, 0, 0,
+                    bar["taker_buy_base"], 0, 0,
+                ]], columns=KLINE_COLS)
+                for c in ("open", "high", "low", "close", "volume",
+                          "quote_volume", "taker_buy_base"):
+                    new[c] = pd.to_numeric(new[c], errors="coerce")
+                new["open_time"] = new["open_time"].astype(np.int64)
+                new.index = pd.to_datetime(new["open_time"], unit="ms")
+                self.bars[sym] = pd.concat([df, new])[-1200:]
+            if missing:
+                log.info("%d монет без свечи из потока — дозапрос REST",
+                         len(missing))
+                await self._rest_fetch_coins(missing, fresh_open)
+        else:
+            # ЗАПАСНОЙ РЕЖИМ: поток мёртв — обход всех монет пачками
+            via = "REST (запасной режим)"
+            await self._rest_fetch_all()
+        log.info("скан: свечи обновлены за %.1f сек (%s) | %s",
+                 time.time() - t0, via,
+                 self.streams.status() if self.streams else "REST-режим")
         btc = self.bars.get("BTCUSDT")
         self.btc_close = btc["close"] if btc is not None else None
         # 1) оценка ВСЕХ доступных символов бара (только закрытые бары в df)
@@ -677,8 +717,77 @@ class Ml5hEngine:
         except Exception:
             log.exception("pending: сохранение не удалось")
 
+    async def _rest_fetch_coins(self, coins: list[str],
+                                fresh_open: int) -> None:
+        """Дозапрос свечей недостающих монет: пачками (gather + лимит 30)."""
+        sem = asyncio.Semaphore(30)
+
+        async def one(sym: str) -> None:
+            async with sem:
+                try:
+                    rows = await asyncio.to_thread(
+                        self.ex.fetch_klines, sym, "30m", 3)
+                except Exception as e:
+                    log.warning("%s: дозапрос свечей не удался (%s)",
+                                sym, str(e)[:60])
+                    return
+                if not rows:
+                    return
+                rows = rows[:-1]
+                r = rows[-1]
+                df = self.bars.get(sym)
+                if df is None or int(r[0]) <= int(df["open_time"].iloc[-1]):
+                    return
+                new = pd.DataFrame([r], columns=KLINE_COLS)
+                for c in ("open", "high", "low", "close", "volume",
+                          "quote_volume", "taker_buy_base"):
+                    new[c] = pd.to_numeric(new[c], errors="coerce")
+                new["open_time"] = new["open_time"].astype(np.int64)
+                new.index = pd.to_datetime(new["open_time"], unit="ms")
+                self.bars[sym] = pd.concat([df, new])[-1200:]
+
+        await asyncio.gather(*(one(s) for s in coins))
+
+    async def _rest_fetch_all(self) -> None:
+        """Запасной режим (поток мёртв): прежний обход всех монет,
+        ускоренный пачками по 30 параллельных запросов."""
+        sem = asyncio.Semaphore(30)
+
+        async def one(sym: str) -> None:
+            async with sem:
+                try:
+                    rows = await asyncio.to_thread(
+                        self.ex.fetch_klines, sym, "30m", 3)
+                except Exception:
+                    return
+                if not rows:
+                    return
+                rows = rows[:-1]
+                r = rows[-1]
+                df = self.bars.get(sym)
+                if df is None or int(r[0]) <= int(df["open_time"].iloc[-1]):
+                    return
+                new = pd.DataFrame([r], columns=KLINE_COLS)
+                for c in ("open", "high", "low", "close", "volume",
+                          "quote_volume", "taker_buy_base"):
+                    new[c] = pd.to_numeric(new[c], errors="coerce")
+                new["open_time"] = new["open_time"].astype(np.int64)
+                new.index = pd.to_datetime(new["open_time"], unit="ms")
+                self.bars[sym] = pd.concat([df, new])[-1200:]
+
+        await asyncio.gather(*(one(s) for s in self.symbols))
+
+    async def _best_prices(self, sym: str):
+        """Лучшие цены на вход: сначала поток (!bookTicker, живые),
+        если нет/устарели — REST (источник правды)."""
+        if self.streams is not None:
+            ba = self.streams.bid_ask(sym)
+            if ba:
+                return (Decimal(str(ba[0])), Decimal(str(ba[1])))
+        return await asyncio.to_thread(self.ex.order_book_top, sym)
+
     async def open_long(self, sym: str, p: float) -> None:
-        top = await asyncio.to_thread(self.ex.order_book_top, sym)
+        top = await self._best_prices(sym)
         if not top:
             return
         bb, _ba = top
@@ -717,7 +826,7 @@ class Ml5hEngine:
     async def open_short(self, sym: str, p: float) -> None:
         """Зеркало open_long: SELL post-only по аску; цена ушла сквозь
         уровень — сигнал пропускается (как у лонга, без тейкер-погони)."""
-        top = await asyncio.to_thread(self.ex.order_book_top, sym)
+        top = await self._best_prices(sym)
         if not top:
             return
         _bb, ba = top
@@ -916,6 +1025,58 @@ class Ml5hEngine:
         log.info("ЗАКРЫТО %s @%s pnl=%.3f (день %.2f)", sym, exit_px, pnl,
                  day_disp)
 
+    def _on_ws_order(self, ev: dict) -> None:
+        """Мгновенное исполнение заявки из потока (ORDER_TRADE_UPDATE).
+        REST-проверка остаётся в manage как источник правды; здесь —
+        только быстрый переход заявки в позицию и стоп на бирже."""
+        try:
+            cid = str(ev.get("client_id") or "")
+            if not cid.startswith("ml5-"):
+                return
+            sym = str(ev.get("symbol") or "")
+            status = str(ev.get("status") or "")
+            pend = self.pending.get(sym)
+            if pend is None:
+                return
+            try:
+                oid_match = int(pend.get("oid", 0)) == int(ev.get("order_id") or -1)
+            except Exception:
+                oid_match = False
+            if not oid_match:
+                return
+            if status == "FILLED":
+                px = float(ev.get("price") or pend["px"])
+                qty = Decimal(str(ev.get("filled_qty") or pend["qty"]))
+                if qty <= 0:
+                    return
+                self.pos[sym] = {**pend, "px": px, "qty": qty,
+                                 "entry_ts": time.time(), "maker_entry": True}
+                self.pending.pop(sym, None)
+                self._save_pending()
+                asyncio.ensure_future(self._finish_ws_entry(sym))
+        except Exception:
+            log.exception("поток: событие заявки не обработано")
+
+    async def _finish_ws_entry(self, sym: str) -> None:
+        """Мгновенный стоп и ТГ при исполнении из потока."""
+        try:
+            pos = self.pos.get(sym)
+            if pos is None:
+                return
+            await self.place_stop(sym, pos)
+            side = "ШОРТ" if pos.get("side") == "SHORT" else "ЛОНГ"
+            tg.fire(f"🟢 <b>ML5 ВХОД {sym} {side}</b> "
+                    f"{pos['qty']} @ {pos['px']} (мейкер) p={pos.get('p', 0):.2f}")
+        except Exception:
+            log.exception("поток: вход не оформлен")
+
+    def _on_ws_balance(self, b: float) -> None:
+        try:
+            if b and b > 0:
+                self.balance = Decimal(str(b))
+        except Exception:
+            pass
+
     async def recon(self) -> None:
         """Биржа — источник правды: раз в 10 минут сверяем позиции.
         Своя (метка ml5- на входном ордере) — усыновляем с настоящим
@@ -997,6 +1158,8 @@ class Ml5hEngine:
 
     async def manage(self) -> None:
         for sym, pend in list(self.pending.items()):
+            if sym not in self.pending:
+                continue          # исполнение уже подхвачено потоком (ws)
             if time.time() - pend["ts"] > self.c.entry_ttl_s:
                 await asyncio.to_thread(self.ex.cancel_order, sym,
                                         pend["oid"])
