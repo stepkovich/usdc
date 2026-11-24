@@ -197,7 +197,8 @@ class Ml5hEngine:
             self.streams = MarketStreams(self.symbols)
             await self.streams.start()
             self.user_feed = UserStreams(self.cfg.api_key,
-                                         self.cfg.exec_rest_url)
+                                         self.cfg.exec_rest_url,
+                                         rest_client=self.ex.client)
             self.user_feed.on_order_update = self._on_ws_order
             self.user_feed.on_balance_update = self._on_ws_balance
             await self.user_feed.start()
@@ -1083,6 +1084,13 @@ class Ml5hEngine:
                 oid_match = False
             if not oid_match:
                 return
+            if (status == "FILLED" and ev.get("maker") is False
+                    and ev.get("time_in_force") == "GTX"):
+                # ИНВАРИАНТА НАРУШЕНА (паттерн newsetka): наша входная
+                # заявка «только поставщик» исполнилась как забирающая —
+                # так быть не должно, ищи причину
+                log.error("!!! НЕ-МЕЙКЕР ИСПОЛНЕНИЕ %s заявка=%s — "
+                          "GTX-вход исполнился забирающим!", sym, cid)
             if status == "FILLED":
                 px = float(ev.get("price") or pend["px"])
                 qty = Decimal(str(ev.get("filled_qty") or pend["qty"]))

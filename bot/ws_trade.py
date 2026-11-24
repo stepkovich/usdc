@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 import time
 
-from binance_common.configuration import ConfigurationWebSocketAPI, WebsocketMode
+from binance_common.configuration import (ConfigurationWebSocketAPI,
+                                          WebsocketMode)
 from binance_common.constants import DERIVATIVES_TRADING_USDS_FUTURES_WS_API_PROD_URL
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
@@ -32,6 +33,28 @@ from binance_sdk_derivatives_trading_usds_futures.websocket_api.models import (
 log = logging.getLogger("ws_trade")
 
 UNHEALTHY_COOLDOWN_SEC = 60        # после сбоя канал пробуют через минуту
+
+# Транспортные маркеры смерти канала (паттерн newsetka, обкатан живыми
+# деньгами): если текст ошибки содержит одно из этих слов — транспорт
+# закрыт, дальнейшие вызовы бессмысленны до переподключения
+TRANSPORT_MARKERS = [
+    "cannot write to closing transport",
+    "connection closed",
+    "ws closed",
+    "connection reset",
+    "session is closing",
+    "server disconnected",
+    "clientconnectorerror",
+    "connectionlost",
+    "asyncio.timeout",
+    "timeouterror",
+]
+
+
+def _is_transport_error(error: Exception) -> bool:
+    """Смерть транспорта? (паттерн newsetka — транспорт ниже SDK)."""
+    s = str(error).lower()
+    return any(m in s for m in TRANSPORT_MARKERS)
 
 
 def _enum(enum_cls, name: str):
@@ -52,19 +75,28 @@ class WsTradeApi:
         self.orders_sent = 0
 
     async def start(self) -> None:
+        # Значения конфигурации — из newsetka (боевые, обкатаны): тайм-аут
+        # 10с, переподключение через 3с, перелогин сессии, лимиты в ответах
         config = ConfigurationWebSocketAPI(
             api_key=self.api_key,
             api_secret=self.api_secret,
             stream_url=DERIVATIVES_TRADING_USDS_FUTURES_WS_API_PROD_URL,
+            timeout=10000,
+            reconnect_delay=3000,
+            session_re_logon=True,
+            return_rate_limits=True,
         )
         self._client = DerivativesTradingUsdsFutures(config_ws_api=config)
         self._connection = await self._client.websocket_api.create_connection()
         self.healthy = True
         log.info("торговый вебсокет подключён")
 
-    def mark_unhealthy(self) -> None:
+    def mark_unhealthy(self, error: Exception | None = None) -> None:
         self.healthy = False
         self._sick_since = time.time()
+        if error is not None and _is_transport_error(error):
+            log.critical("ws-trade: СМЕРТЬ ТРАНСПОРТА (%s) — канал закрыт "
+                         "до переподключения", str(error)[:100])
 
     def usable(self) -> bool:
         if self.healthy:
@@ -104,7 +136,7 @@ class WsTradeApi:
                 new_client_order_id=client_id,
             )
         except Exception as e:
-            self.mark_unhealthy()
+            self.mark_unhealthy(e)
             raise
         result = getattr(resp, "result", None)
         self.orders_sent += 1
@@ -151,7 +183,7 @@ class WsTradeApi:
         try:
             resp = await self._connection.new_algo_order(**kwargs)
         except Exception as e:
-            self.mark_unhealthy()
+            self.mark_unhealthy(e)
             raise
         result = getattr(resp, "result", None)
         if not self.healthy:
@@ -171,7 +203,7 @@ class WsTradeApi:
             resp = await self._connection.cancel_order(symbol=symbol,
                                                        order_id=int(order_id))
         except Exception as e:
-            self.mark_unhealthy()
+            self.mark_unhealthy(e)
             raise
         result = getattr(resp, "result", None)
         return {"status": getattr(result, "status", None)} if result else None
@@ -183,7 +215,7 @@ class WsTradeApi:
             resp = await self._connection.cancel_algo_order(
                 symbol=symbol, algo_id=int(algo_id))
         except Exception as e:
-            self.mark_unhealthy()
+            self.mark_unhealthy(e)
             raise
         result = getattr(resp, "result", None)
         return {"status": getattr(result, "status", None)} if result else None

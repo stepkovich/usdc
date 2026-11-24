@@ -146,6 +146,7 @@ class MarketStreams:
             stream_url=DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_PROD_URL,
             mode=WebsocketMode.POOL,
             pool_size=POOL_SIZE,
+            reconnect_delay=3000,             # боевое значение newsetka
         )
         self._client = DerivativesTradingUsdsFutures(config_ws_streams=config)
         ws = self._client.websocket_streams
@@ -208,18 +209,34 @@ class MarketStreams:
 
 class UserStreams:
     """Пользовательский поток: исполнение заявок и баланс по listenKey.
-    SDK ключ не продлевает — продление REST-запросом каждые 30 минут."""
+    Продление ключа — методом SDK (keepalive_user_data_stream, как в
+    newsetka), с сырым REST-запросом в запасе. Событие «ключ истёк»
+    включает полную пересборку потока с новым ключом."""
 
-    def __init__(self, api_key: str, rest_base: str):
+    def __init__(self, api_key: str, rest_client=None, rest_base: str = ""):
         self.api_key = api_key
-        self.rest_base = rest_base
+        self.rest_client = rest_client   # SDK REST-клиент (продление ключа)
+        self.rest_base = rest_base       # запас: сырой запрос без SDK
         self.listen_key: str | None = None
         self.last_event = 0.0
-        self.on_order_update = None    # колбэк(словарь события заявки)
-        self.on_balance_update = None  # колбэк(баланс USDT float)
+        self.on_order_update = None      # колбэк(словарь события заявки)
+        self.on_balance_update = None    # колбэк(баланс USDT float)
+        self.on_key_expired = None       # колбэк() — ключ истёк, пересобрать
         self._client = None
+        self._handles: list = []
 
     async def _new_listen_key(self) -> str | None:
+        # СНАЧАЛА метод SDK (продление = тот же PUT; ключи уже внутри клиента)
+        if self.rest_client is not None:
+            try:
+                resp = self.rest_client.rest_api.start_user_data_stream()
+                key = resp.data().listen_key
+                if key:
+                    return key
+            except Exception as e:
+                log.warning("listenKey через SDK не получен (%s) — сырой запрос",
+                            str(e)[:60])
+        # запас: сырой запрос без SDK
         url = f"{self.rest_base}/fapi/v1/listenKey"
         try:
             async with aiohttp.ClientSession() as s:
@@ -251,14 +268,28 @@ class UserStreams:
         log.info("пользовательский поток подключён")
 
     async def _keepalive_loop(self) -> None:
-        url = f"{self.rest_base}/fapi/v1/listenKey"
         while True:
             await asyncio.sleep(LISTENKEY_KEEPALIVE_SEC)
+            # СНАЧАЛА метод SDK (ключи уже внутри клиента)
+            done = False
+            if self.rest_client is not None:
+                try:
+                    self.rest_client.rest_api.keepalive_user_data_stream()
+                    log.info("listenKey: продлён (SDK)")
+                    done = True
+                except Exception as e:
+                    log.warning("listenKey: продление SDK не удалось (%s)",
+                                str(e)[:60])
+            if done:
+                continue
+            # запас: сырой запрос без SDK
+            url = f"{self.rest_base}/fapi/v1/listenKey"
             try:
                 async with aiohttp.ClientSession() as s:
                     async with s.put(url, headers={
                         "X-MBX-APIKEY": self.api_key}) as resp:
-                        log.info("listenKey: продлён (%d)", resp.status)
+                        log.info("listenKey: продлён сырым запросом (%d)",
+                                 resp.status)
             except Exception:
                 log.exception("listenKey: продление не удалось")
 
@@ -270,6 +301,11 @@ class UserStreams:
             if not isinstance(data, dict):
                 return
             etype = data.get("e")
+            if etype == "listenKeyExpired":
+                # КЛЮЧ ИСТЁК (паттерн newsetka): флаг пересборки потока
+                log.warning("user: КЛЮЧ ПОТОКА ИСТЁК — пересборка с новым ключом")
+                asyncio.ensure_future(self.restart())
+                return
             if etype == "ORDER_TRADE_UPDATE" and self.on_order_update:
                 o = data.get("o", {})
                 self.on_order_update({
@@ -278,8 +314,12 @@ class UserStreams:
                     "symbol": o.get("s"),
                     "side": o.get("S"),
                     "status": o.get("X"),
+                    "maker": o.get("m"),          # инвариант GTX: True обязателен
+                    "order_type": o.get("o"),
+                    "time_in_force": o.get("f"),
                     "price": o.get("L"),          # цена последнего исполнения
                     "filled_qty": o.get("z"),     # исполнено всего
+                    "realized_pnl": o.get("rp"),
                     "time": data.get("T"),
                 })
             elif etype == "ACCOUNT_UPDATE" and self.on_balance_update:
@@ -288,6 +328,32 @@ class UserStreams:
                         self.on_balance_update(float(a.get("wb", 0) or 0))
         except Exception:
             log.exception("user: событие не обработано")
+
+    async def restart(self) -> None:
+        """Пересборка пользовательского потока с НОВЫМ ключом."""
+        try:
+            for h in self._handles:
+                try:
+                    await h.unsubscribe()
+                except Exception:
+                    pass
+            self._handles.clear()
+            self.listen_key = await self._new_listen_key()
+            if not self.listen_key:
+                log.warning("user: новый ключ не получен — поток остановлен")
+                return
+            config = ConfigurationWebSocketStreams(
+                stream_url=DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_PROD_URL,
+            )
+            self._client = DerivativesTradingUsdsFutures(config_ws_streams=config)
+            ws = self._client.websocket_streams
+            await ws.create_connection()
+            handle = await ws.user_data(self.listen_key)
+            handle.on("message", self._on_user_event)
+            self._handles.append(handle)
+            log.info("user: поток пересобран с новым ключом")
+        except Exception:
+            log.exception("user: пересборка не удалась")
 
     def status(self) -> str:
         if not self.listen_key:
