@@ -138,17 +138,50 @@ class WsTradeApi:
         except Exception as e:
             self.mark_unhealthy(e)
             raise
-        result = getattr(resp, "result", None)
+        result = resp.data().result
         self.orders_sent += 1
         if not self.healthy:
             self.healthy = True
         out = {}
-        if result is not None:
+        if result is None:
+            return out
+        if isinstance(result, dict):
+            for k in ("order_id", "orderId", "status", "price", "orig_qty",
+                      "origQty", "executed_qty", "executedQty",
+                      "client_order_id", "clientOrderId"):
+                if result.get(k) is not None:
+                    out[k.replace("orderId", "order_id")
+                         .replace("origQty", "orig_qty")
+                         .replace("executedQty", "executed_qty")
+                         .replace("clientOrderId", "client_order_id")] = result[k]
+        else:
             for field in ("order_id", "status", "price", "orig_qty",
                           "executed_qty", "client_order_id"):
                 v = getattr(result, field, None)
                 if v is not None:
                     out[field] = v
+        return out
+
+    async def market_order(self, symbol: str, side: str, qty: float) -> dict:
+        """Рыночная заявка (для тестов и аварийных закрытий)."""
+        if not self.usable() or not self._connection:
+            raise RuntimeError("ws-trade: канал нездоров")
+        try:
+            resp = await self._connection.new_order(
+                symbol=symbol, side=_enum(NewOrderSideEnum, side.upper()),
+                type=_enum(NewOrderTypeEnum, "MARKET"), quantity=float(qty),
+            )
+        except Exception as e:
+            self.mark_unhealthy(e)
+            raise
+        result = getattr(resp, "result", None)
+        self.orders_sent += 1
+        out = {}
+        if result is not None:
+            for f in ("order_id", "status", "executed_qty", "avg_price"):
+                v = getattr(result, f, None)
+                if v is not None:
+                    out[f] = v
         return out
 
     async def new_algo_stop(self, symbol: str, side: str,
@@ -166,7 +199,7 @@ class WsTradeApi:
             symbol=symbol,
             side=_enum(NewAlgoOrderSideEnum, side.upper()),
             type=_enum(NewAlgoOrderTypeEnum, "STOP_MARKET"),
-            stop_price=float(stop_price),
+            trigger_price=float(stop_price),
             working_type=_enum(NewAlgoOrderWorkingTypeEnum, "CONTRACT_PRICE"),
             client_algo_id=client_id,
         )
@@ -185,11 +218,19 @@ class WsTradeApi:
         except Exception as e:
             self.mark_unhealthy(e)
             raise
-        result = getattr(resp, "result", None)
+        result = resp.data().result
         if not self.healthy:
             self.healthy = True
         out = {}
-        if result is not None:
+        if result is None:
+            return out
+        if isinstance(result, dict):
+            for k in ("order_id", "orderId", "algo_id", "algoId", "status",
+                      "client_algo_id", "clientAlgoId"):
+                if result.get(k) is not None:
+                    out[k.replace("algoId", "algo_id")
+                         .replace("clientAlgoId", "client_algo_id")] = result[k]
+        else:
             for field in ("order_id", "algo_id", "status", "client_algo_id"):
                 v = getattr(result, field, None)
                 if v is not None:
@@ -205,8 +246,12 @@ class WsTradeApi:
         except Exception as e:
             self.mark_unhealthy(e)
             raise
-        result = getattr(resp, "result", None)
-        return {"status": getattr(result, "status", None)} if result else None
+        result = resp.data().result
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            return {"status": result.get("status")}
+        return {"status": getattr(result, "status", None)}
 
     async def cancel_algo_order(self, symbol: str, algo_id) -> dict | None:
         if not self.usable() or not self._connection:
@@ -217,7 +262,7 @@ class WsTradeApi:
         except Exception as e:
             self.mark_unhealthy(e)
             raise
-        result = getattr(resp, "result", None)
+        result = resp.data().result
         return {"status": getattr(result, "status", None)} if result else None
 
     async def query_order(self, symbol: str, order_id: int) -> dict | None:
@@ -225,15 +270,16 @@ class WsTradeApi:
             raise RuntimeError("ws-trade: канал нездоров")
         resp = await self._connection.query_order(symbol=symbol,
                                                   order_id=int(order_id))
-        result = getattr(resp, "result", None)
+        result = resp.data().result
         if result is None:
             return None
-        return {
-            "status": getattr(result, "status", None),
-            "avg_price": getattr(result, "avg_price", None),
-            "executed_qty": getattr(result, "executed_qty", None),
-            "order_id": getattr(result, "order_id", None),
-        }
+        if isinstance(result, dict):
+            return {"status": result.get("status"),
+                    "avg_price": result.get("avg_price"),
+                    "executed_qty": result.get("executed_qty")}
+        return {"status": getattr(result, "status", None),
+                "avg_price": getattr(result, "avg_price", None),
+                "executed_qty": getattr(result, "executed_qty", None)}
 
     async def account_information(self) -> dict | None:
         if not self.usable() or not self._connection:
