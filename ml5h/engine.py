@@ -29,6 +29,7 @@ from bot.executor import api_code
 
 import bot.telegram as tg
 from bot.streams import MarketStreams, UserStreams
+from bot.ws_trade import WsTradeApi
 from ml5h.features import feature_row
 
 log = logging.getLogger("ml5h")
@@ -58,6 +59,7 @@ class Ml5hEngine:
         # None = REST-режим (запасной обход)
         self.streams = None
         self.user_feed = None
+        self.ws_trade = None
         # цепь подтверждения (идея владельца 23.11, победитель замера
         # четырёх машин usdc-battle-replay: +34.3бп/сд, +859 на сотне):
         # sym -> (ms бара, сторона) последнего сырого сигнала; вход
@@ -199,10 +201,13 @@ class Ml5hEngine:
             self.user_feed.on_order_update = self._on_ws_order
             self.user_feed.on_balance_update = self._on_ws_balance
             await self.user_feed.start()
+            self.ws_trade = WsTradeApi(self.cfg.api_key, self.cfg.api_secret)
+            await self.ws_trade.start()
         except Exception:
             log.exception("потоки не стартовали — бот в REST-режиме")
             self.streams = None
             self.user_feed = None
+            self.ws_trade = None
         log.info("тёплый старт: %d/%d символов, баланс %s USDT",
                  len(self.bars), len(self.symbols), self.balance)
 
@@ -668,10 +673,23 @@ class Ml5hEngine:
             fl = self.ex.filters.get(sym)
             if fl is not None:
                 stop_px = fl.round_price(stop_px)
-            oid = await asyncio.to_thread(
-                self.ex.place_stop_market, sym,
-                "BUY" if short else "SELL", stop_px,
-                f"ml5s-{sym}-{int(time.time())}")
+            oid = None
+            if self.ws_trade is not None and self.ws_trade.usable():
+                try:
+                    res = await self.ws_trade.new_algo_stop(
+                        symbol=sym, side="BUY" if short else "SELL",
+                        stop_price=float(stop_px),
+                        client_id=f"ml5s-{sym}-{int(time.time())}")
+                    oid = res.get("algo_id") or res.get("order_id")
+                except Exception as e:
+                    log.warning("%s: ws-стоп не удался (%s) — REST", sym,
+                                str(e)[:60])
+                    self.ws_trade.mark_unhealthy()
+            if oid is None:
+                oid = await asyncio.to_thread(
+                    self.ex.place_stop_market, sym,
+                    "BUY" if short else "SELL", stop_px,
+                    f"ml5s-{sym}-{int(time.time())}")
             if oid is not None:
                 pos["sl_oid"] = oid
                 pos["sl_px"] = float(stop_px)
@@ -800,19 +818,31 @@ class Ml5hEngine:
             if sym in self.symbols:
                 self.symbols.remove(sym)
             return
-        try:
-            oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
-                                          "BUY", Decimal(str(bb)), qty,
-                                          f"ml5-{sym}-{int(time.time())}",
-                                          post_only=True)
-        except BinanceError as e:
-            if api_code(e) in (-4411, -1121):
-                log.warning("%s: биржа требует соглашения TradFi — символ "
-                            "исключён", sym)
-                if sym in self.symbols:
-                    self.symbols.remove(sym)
-                return
-            raise
+        client_id = f"ml5-{sym}-{int(time.time())}"
+        oid = None
+        if self.ws_trade is not None and self.ws_trade.usable():
+            try:
+                res = await self.ws_trade.new_order(
+                    symbol=sym, side="BUY", qty=float(qty), price=float(bb),
+                    client_id=client_id, post_only=True)
+                oid = res.get("order_id")
+            except Exception as e:
+                log.warning("%s: ws-заявка не удалась (%s) — REST", sym,
+                            str(e)[:60])
+                self.ws_trade.mark_unhealthy()
+        if oid is None:
+            try:
+                oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
+                                              "BUY", Decimal(str(bb)), qty,
+                                              client_id, post_only=True)
+            except BinanceError as e:
+                if api_code(e) in (-4411, -1121):
+                    log.warning("%s: биржа требует соглашения TradFi — символ "
+                                "исключён", sym)
+                    if sym in self.symbols:
+                        self.symbols.remove(sym)
+                    return
+                raise
         if oid is None:
             # цена ушла сквозь уровень: экзамен считал мейкерский вход —
             # пропускаем сигнал (погоня тейкером = вход хуже обещанного)
@@ -838,19 +868,31 @@ class Ml5hEngine:
             if sym in self.symbols:
                 self.symbols.remove(sym)
             return
-        try:
-            oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
-                                          "SELL", Decimal(str(ba)), qty,
-                                          f"ml5-{sym}-{int(time.time())}",
-                                          post_only=True)
-        except BinanceError as e:
-            if api_code(e) in (-4411, -1121):
-                log.warning("%s: биржа требует соглашения TradFi — символ "
-                            "исключён", sym)
-                if sym in self.symbols:
-                    self.symbols.remove(sym)
-                return
-            raise
+        client_id = f"ml5-{sym}-{int(time.time())}"
+        oid = None
+        if self.ws_trade is not None and self.ws_trade.usable():
+            try:
+                res = await self.ws_trade.new_order(
+                    symbol=sym, side="SELL", qty=float(qty), price=float(ba),
+                    client_id=client_id, post_only=True)
+                oid = res.get("order_id")
+            except Exception as e:
+                log.warning("%s: ws-заявка не удалась (%s) — REST", sym,
+                            str(e)[:60])
+                self.ws_trade.mark_unhealthy()
+        if oid is None:
+            try:
+                oid = await asyncio.to_thread(self.ex.place_entry_limit, sym,
+                                              "SELL", Decimal(str(ba)), qty,
+                                              client_id, post_only=True)
+            except BinanceError as e:
+                if api_code(e) in (-4411, -1121):
+                    log.warning("%s: биржа требует соглашения TradFi — символ "
+                                "исключён", sym)
+                    if sym in self.symbols:
+                        self.symbols.remove(sym)
+                    return
+                raise
         if oid is None:
             # зеркало лонга: экзамен считал вход по цене лимитки —
             # погоня тейкером = вход хуже обещанного, сигнал пропускаем
@@ -884,8 +926,7 @@ class Ml5hEngine:
                 return
         oid = await asyncio.to_thread(self.ex.place_market, sym, "BUY",
                                       pos["qty"], reduce_only=True)
-        info = await asyncio.to_thread(self.ex.query_order_full, sym,
-                                       oid) if oid else None
+        info = await self._query_order_any(sym, oid) if oid else None
         exit_px = float((info or {}).get("avgPrice") or 0)
         await self.finish(sym, pos, exit_px, "taker")
 
@@ -923,8 +964,7 @@ class Ml5hEngine:
                 return
         oid = await asyncio.to_thread(self.ex.place_market, sym, "SELL",
                                       pos["qty"], reduce_only=True)
-        info = await asyncio.to_thread(self.ex.query_order_full, sym,
-                                       oid) if oid else None
+        info = await self._query_order_any(sym, oid) if oid else None
         exit_px = float((info or {}).get("avgPrice") or 0)
         await self.finish(sym, pos, exit_px, "taker")
 
@@ -936,8 +976,7 @@ class Ml5hEngine:
         if pos.get("sl_oid"):
             # обычный выход: биржевой стоп больше не нужен (иначе останется
             # сиротой и перевернёт будущую позицию по этой монете)
-            await asyncio.to_thread(self.ex.cancel_algo_order,
-                                    sym, pos["sl_oid"])
+            await self._cancel_stop_order(sym, pos["sl_oid"])
             pos.pop("sl_oid", None)
         if exit_px <= 0 and exchange_pnl is not None:
             pnl = Decimal(str(exchange_pnl))
@@ -1087,6 +1126,46 @@ class Ml5hEngine:
         except Exception:
             pass
 
+    async def _cancel_entry_order(self, sym: str, oid) -> None:
+        """Снятие входной заявки: вебсокет-канал, при сбое — REST."""
+        if self.ws_trade is not None and self.ws_trade.usable():
+            try:
+                await self.ws_trade.cancel_order(symbol=sym,
+                                                 order_id=int(oid))
+                return
+            except Exception as e:
+                log.warning("%s: ws-снятие заявки не удалось (%s) — REST",
+                            sym, str(e)[:60])
+        await asyncio.to_thread(self.ex.cancel_order, sym, oid)
+
+    async def _cancel_stop_order(self, sym: str, algo_id) -> None:
+        """Снятие биржевого стопа: вебсокет-канал, при сбое — REST."""
+        if self.ws_trade is not None and self.ws_trade.usable():
+            try:
+                await self.ws_trade.cancel_algo_order(symbol=sym,
+                                                      algo_id=int(algo_id))
+                return
+            except Exception as e:
+                log.warning("%s: ws-снятие стопа не удалось (%s) — REST",
+                            sym, str(e)[:60])
+        await asyncio.to_thread(self.ex.cancel_algo_order, sym, algo_id)
+
+    async def _query_order_any(self, sym: str, oid):
+        """Статус заявки: вебсокет-канал, при сбое — REST (источник правды).
+        Возвращает словарь с ключами как у REST (status/avgPrice/executedQty)."""
+        if self.ws_trade is not None and self.ws_trade.usable():
+            try:
+                r = await self.ws_trade.query_order(symbol=sym,
+                                                    order_id=int(oid))
+                if r is not None:
+                    return {"status": r.get("status"),
+                            "avgPrice": r.get("avg_price"),
+                            "executedQty": r.get("executed_qty")}
+            except Exception as e:
+                log.warning("%s: ws-запрос статуса не удался (%s) — REST",
+                            sym, str(e)[:60])
+        return await asyncio.to_thread(self.ex.query_order_full, sym, oid)
+
     async def recon(self) -> None:
         """Биржа — источник правды: раз в 10 минут сверяем позиции.
         Своя (метка ml5- на входном ордере) — усыновляем с настоящим
@@ -1141,8 +1220,7 @@ class Ml5hEngine:
                     if done is False:
                         tg.fire(f"✋ <b>ML5 {sym}</b> позиция закрыта "
                                 f"вручную — снимаю биржевой стоп")
-                        await asyncio.to_thread(
-                            self.ex.cancel_algo_order, sym, pos["sl_oid"])
+                        await self._cancel_stop_order(sym, pos["sl_oid"])
                         pos.pop("sl_oid", None)
                     elif done is True:
                         tg.fire(f"🛑 <b>ML5 СТОП {sym}</b> сработал на бирже "
@@ -1171,10 +1249,8 @@ class Ml5hEngine:
             if sym not in self.pending:
                 continue          # исполнение уже подхвачено потоком (ws)
             if time.time() - pend["ts"] > self.c.entry_ttl_s:
-                await asyncio.to_thread(self.ex.cancel_order, sym,
-                                        pend["oid"])
-                info = await asyncio.to_thread(self.ex.query_order_full, sym,
-                                               pend["oid"])
+                await self._cancel_entry_order(sym, pend["oid"])
+                info = await self._query_order_any(sym, pend["oid"])
                 if (info or {}).get("status") == "FILLED":
                     px = float((info or {}).get("avgPrice") or pend["px"])
                     self.pos[sym] = {**pend, "px": px,
