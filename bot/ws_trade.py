@@ -254,11 +254,13 @@ class WsTradeApi:
         return {"status": getattr(result, "status", None)}
 
     async def cancel_algo_order(self, symbol: str, algo_id) -> dict | None:
+        # symbol НЕ пересылаем: SDK-метод /algoOrder.cancel принимает
+        # только id/algo_id/client_algo_id (экзамен 24.11 поймал TypeError)
         if not self.usable() or not self._connection:
             raise RuntimeError("ws-trade: канал нездоров")
         try:
             resp = await self._connection.cancel_algo_order(
-                symbol=symbol, algo_id=int(algo_id))
+                algo_id=int(algo_id))
         except Exception as e:
             self.mark_unhealthy(e)
             raise
