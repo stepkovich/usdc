@@ -438,15 +438,17 @@ def main():
         with open(res_path, "a") as f:
             for r in resolved:
                 f.write(json.dumps(r) + "\n")
-    # --- сводка ---
+    # --- сводка: ДВЕ ЭПОХИ (решение владельца 24.11) ---
+    # с 23.11 сигнал = подтверждение 2 бара подряд (как в бою); до 23.11
+    # сигнал = каждый 30-мин бар без подтверждения. Смешивать эпохи в
+    # одних вердиктах нельзя — считаем раздельно.
     allr = _load_results()
     if allr:
         df = pd.DataFrame(allr)
-        inf = df[df["in_filter"]]
-        exc = df[~df["in_filter"]]
-        avg_all = df.pnl_bp.mean()
-        avg_inf = inf.pnl_bp.mean() if len(inf) else float("nan")
-        avg_exc = exc.pnl_bp.mean() if len(exc) else float("nan")
+        CUTOFF = int(datetime(2026, 11, 23,
+                              tzinfo=timezone.utc).timestamp() * 1000)
+        new_df = df[df["ot"] >= CUTOFF]
+        old_df = df[df["ot"] < CUTOFF]
 
         def verd(delta, need=10):
             if delta >= need:
@@ -455,97 +457,96 @@ def main():
                 return "пока в минусе ✗"
             return "пока ничья"
 
-        d_filt = avg_inf - avg_exc
-        v_filt = verd(d_filt)
-        plain = [f"судья: накоплено {len(df)} сигналов | "
-                 f"с фильтром {len(inf)}: {avg_inf:+.1f}бп | "
-                 f"без {len(exc)}: {avg_exc:+.1f}бп"]
-        html = [f"🧠 <b>Судья Бури</b> — накоплено сигналов: <b>{len(df)}</b>",
-                "",
-                "📐 <b>Фильтр «тихая треть»</b> (сонные монеты мимо):",
-                f"• пропущено им: {len(inf)} → <b>{avg_inf:+.1f} бп</b>",
-                f"• им отсеяно: {len(exc)} → {avg_exc:+.1f} бп",
-                f"• вердикт: {v_filt}"]
-        meta_lines = []
-        if "meta_ok" in df.columns:
-            mo = df[df["meta_ok"] == True]   # noqa: E712 (NaN-устойчиво)
-            mn = df[df["meta_ok"] == False]  # noqa: E712 (NaN — не вето)
-            avg_mo = mo.pnl_bp.mean() if len(mo) else float("nan")
-            avg_mn = mn.pnl_bp.mean() if len(mn) else float("nan")
-            d_meta = avg_mo - avg_all
-            v_meta = verd(d_meta, 5)
-            plain.append(f" | мета-да {len(mo)}: "
-                         f"{avg_mo if len(mo) else float('nan'):+.1f}бп")
-            if len(mn):
-                plain.append(f" | мета-нет {len(mn)}: {avg_mn:+.1f}бп")
-            meta_lines = ["",
-                          "🤝 <b>Мета — «второе мнение»</b>:",
-                          f"• подтверждено ею: {len(mo)} → "
-                          f"<b>{avg_mo:+.1f} бп</b>",
-                          f"• завернуто ею: {len(mn)} → "
-                          f"{avg_mn:+.1f} бп",
-                          f"• средний сигнал: {avg_all:+.1f} бп",
-                          f"• вердикт: {v_meta}"]
-        plain_sides, sides = [], []
-        for side, name in ((1, "Лонги"), (-1, "Шорты")):
-            d2 = inf[inf["side"] == side]
-            if len(d2):
-                plain_sides.append(f"  {name.lower()}: n={len(d2)} "
-                                   f"{d2.pnl_bp.mean():+.1f}бп")
-                sides.append(f"• {name}: {len(d2)} → "
-                             f"<b>{d2.pnl_bp.mean():+.1f} бп</b>")
-        both_txt = ""
-        if "meta_ok" in df.columns:
-            both = df[(df["meta_ok"] == True) & df["in_filter"]]  # noqa: E712
-            if len(both):
-                both_txt = (f"  мета+фильтр: n={len(both)} "
-                            f"{both.pnl_bp.mean():+.1f}бп")
-                plain_sides.append(both_txt)
-        top_lines = []
-        if "top100" in df.columns:
-            t1 = df[df["top100"] == True]   # noqa: E712
-            t0_ = df[df["top100"] == False]  # noqa: E712
-            if len(t1) and len(t0_):
-                d_top = t1.pnl_bp.mean() - t0_.pnl_bp.mean()
-                v_top = verd(d_top, 5)
-                plain.append(f" | топ-100 {len(t1)}: "
-                             f"{t1.pnl_bp.mean():+.1f}бп")
-                top_lines = ["",
-                             "🏪 <b>Топ-100 по обороту</b> (идея владельца "
-                             "02.11, замер обещал +3.4бп):",
+        def era_blocks(d):
+            """(plain, html) — все секции по одной эпохе."""
+            plain, html = [], []
+            if not len(d):
+                return plain, html
+            inf = d[d["in_filter"]]
+            exc = d[~d["in_filter"]]
+            avg_all = d.pnl_bp.mean()
+            avg_inf = inf.pnl_bp.mean() if len(inf) else float("nan")
+            avg_exc = exc.pnl_bp.mean() if len(exc) else float("nan")
+            few = len(d) < 100
+            tail = (" (данных пока мало — вердикты окрепнут после ~100)"
+                    if few else "")
+            plain.append(f"  сигналов {len(d)} | с фильтром {len(inf)}: "
+                         f"{avg_inf:+.1f}бп | без {len(exc)}: {avg_exc:+.1f}бп")
+            html += ["📐 <b>Фильтр «тихая треть»</b> (сонные монеты мимо):",
+                     f"• пропущено им: {len(inf)} → <b>{avg_inf:+.1f} бп</b>",
+                     (f"• им отсеяно: {len(exc)} → {avg_exc:+.1f} бп"
+                      if len(exc) else "• им отсеяно: 0 → пока нет таких"),
+                     f"• вердикт: {verd(avg_inf - avg_exc)}{tail}"]
+            if "meta_ok" in d.columns:
+                mo = d[d["meta_ok"] == True]   # noqa: E712
+                mn = d[d["meta_ok"] == False]  # noqa: E712
+                if len(mo):
+                    avg_mo = mo.pnl_bp.mean()
+                    plain.append(f"  мета-да {len(mo)}: {avg_mo:+.1f}бп")
+                    html += ["🤝 <b>Мета — «второе мнение»</b>:",
+                             f"• подтверждено ею: {len(mo)} → "
+                             f"<b>{avg_mo:+.1f} бп</b>",
+                             f"• средний сигнал: {avg_all:+.1f} бп",
+                             f"• вердикт: {verd(avg_mo - avg_all, 5)}{tail}"]
+                if len(mn):
+                    html.append(f"• завернуто ею: {len(mn)} → "
+                                f"{mn.pnl_bp.mean():+.1f} бп")
+            sides = []
+            for side, name in ((1, "Лонги"), (-1, "Шорты")):
+                d2 = inf[inf["side"] == side]
+                if len(d2):
+                    plain.append(f"  {name.lower()}: n={len(d2)} "
+                                 f"{d2.pnl_bp.mean():+.1f}бп")
+                    sides.append(f"• {name}: {len(d2)} → "
+                                 f"<b>{d2.pnl_bp.mean():+.1f} бп</b>")
+            if sides:
+                html += ["🧭 <b>Стороны</b> (прошедшие фильтр):"] + sides
+            if "top100" in d.columns:
+                t1 = d[d["top100"] == True]    # noqa: E712
+                t0_ = d[d["top100"] == False]  # noqa: E712
+                if len(t1) and len(t0_):
+                    html += ["🏪 <b>Топ-100 по обороту</b> (идея владельца "
+                             "02.11):",
                              f"• из топ-100: {len(t1)} → "
                              f"<b>{t1.pnl_bp.mean():+.1f} бп</b>",
                              f"• вне топ-100: {len(t0_)} → "
                              f"{t0_.pnl_bp.mean():+.1f} бп",
-                             f"• вердикт: {v_top}"]
-        fuel_lines = []
-        if "fuel" in df.columns:
-            lf = df[(df["side"] == 1) & (df["fuel"] == True)]  # noqa: E712
-            ln = df[(df["side"] == 1) & (df["fuel"] != True)]  # noqa: E712
-            if len(lf):
-                plain.append(f" | топливо-да {len(lf)}: "
-                             f"{lf.pnl_bp.mean():+.1f}бп")
-            if len(lf) and len(ln):
-                d_fuel = lf.pnl_bp.mean() - ln.pnl_bp.mean()
-                v_fuel = verd(d_fuel, 5)
-                plain_sides.append(f"  лонги+топливо: n={len(lf)} "
-                                   f"{lf.pnl_bp.mean():+.1f}бп")
-                plain_sides.append(f"  лонги без топлива: n={len(ln)} "
-                                   f"{ln.pnl_bp.mean():+.1f}бп")
-                fuel_lines = ["",
-                              "⛽ <b>ОИ-топливо лонгов</b> (интерес рос "
-                              "перед сигналом):",
-                              f"• с топливом: {len(lf)} → "
-                              f"{lf.pnl_bp.mean():+.1f} бп",
-                              f"• без топлива: {len(ln)} → "
-                              f"{ln.pnl_bp.mean():+.1f} бп",
-                              f"• вердикт: {v_fuel}"]
-        print("\n".join(plain + plain_sides), flush=True)
-        html += meta_lines
-        html += ["", "🧭 <b>Стороны</b>:"] + sides
-        html += top_lines
-        html += fuel_lines
+                             f"• вердикт: "
+                             f"{verd(t1.pnl_bp.mean() - t0_.pnl_bp.mean(), 5)}"
+                             f"{tail}"]
+            if "fuel" in d.columns:
+                lf = d[(d["side"] == 1) & (d["fuel"] == True)]    # noqa: E712
+                ln = d[(d["side"] == 1) & (d["fuel"] != True)]    # noqa: E712
+                if len(lf) and len(ln):
+                    html += ["⛽ <b>ОИ-топливо лонгов</b> (интерес рос "
+                             "перед сигналом):",
+                             f"• с топливом: {len(lf)} → "
+                             f"{lf.pnl_bp.mean():+.1f} бп",
+                             f"• без топлива: {len(ln)} → "
+                             f"{ln.pnl_bp.mean():+.1f} бп",
+                             f"• вердикт: "
+                             f"{verd(lf.pnl_bp.mean() - ln.pnl_bp.mean(), 5)}"
+                             f"{tail}"]
+            return plain, html
+
+        p_new, h_new = era_blocks(new_df)
+        p_old, h_old = era_blocks(old_df)
+        plain = [f"судья: исходов {len(df)} | новая эпоха {len(new_df)} "
+                 f"| старая {len(old_df)}"] + p_new + p_old
+        html = [f"🧠 <b>Судья Бури</b> — сигналов с исходами: "
+                f"<b>{len(df)}</b> (новая {len(new_df)} + старая "
+                f"{len(old_df)})",
+                "",
+                f"🆕 <b>НОВАЯ ЭПОХА</b> — подтверждение 2 бара подряд, "
+                f"как в бою (с 23.11): <b>{len(new_df)}</b>",
+                ""] + h_new + [
+                "",
+                f"📜 <b>Старая эпоха</b> (до 23.11 сигнал = каждый бар, "
+                f"без подтверждения) — историческая справка: "
+                f"{len(old_df)}",
+                ""] + h_old
         (JDIR / "summary.txt").write_text("\n".join(html) + "\n")
+
 
 def _load_signals():
     p = JDIR / "signals.jsonl"
