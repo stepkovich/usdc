@@ -197,8 +197,8 @@ class Ml5hEngine:
             self.streams = MarketStreams(self.symbols)
             await self.streams.start()
             self.user_feed = UserStreams(self.cfg.api_key,
-                                         self.cfg.exec_rest_url,
-                                         rest_client=self.ex.client)
+                                         rest_client=self.ex.client,
+                                         rest_base=self.cfg.exec_rest_url)
             self.user_feed.on_order_update = self._on_ws_order
             self.user_feed.on_balance_update = self._on_ws_balance
             await self.user_feed.start()
