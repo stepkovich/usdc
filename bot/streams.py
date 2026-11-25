@@ -128,6 +128,12 @@ class MarketStreams:
         переподписаться целиком."""
         await asyncio.sleep(SILENCE_RECONNECT_SEC)
         if self.last_event and time.time() - self.last_event < SILENCE_RECONNECT_SEC:
+            # данные возобновились сами (SDK переподключился) — НО флаг
+            # здоровья при разрыве был снят и здесь НЕ возвращался (баг
+            # 25.11: бой часами ходил медленным REST-запасным путём).
+            if not self._healthy:
+                self._healthy = True
+                log.info("потоки: данные возобновились сами — здоровье вернулось")
             return
         log.warning("потоки: тишина %d сек — переподписка заново",
                     SILENCE_RECONNECT_SEC)
