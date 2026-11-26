@@ -1,18 +1,19 @@
-"""ШИРОКОЕ ПЕРЕОБУЧЕНИЕ МОДЕЛИ-БУРИ (v3, 06.10): тот же вопрос, что у
-боевой модели (метка ±0.5 ATR, обе стороны, gate 0.65). Экзамен:
-8 кварталов linspace walk-forward, порог 0.65, мейкер-вход с тестом
-наполнения, стоп -15%. Критерии деплоя: avg >= +0.10% И плюсовых
-кварталов >= 5/8 И нуль >= 95. Сдало -> финальная модель на всей
-панели -> ml5h.txt + мета (gate 0.65, label storm). Не сдало -> старая
-модель остаётся. Вердикт ОБЯЗАТЕЛЬНО в meta и report.json (читает
-синхронизатор)."""
+"""ШИРОКОЕ ПЕРЕОБУЧЕНИЕ МОДЕЛИ-БУРИ (v4, 16.11): месячная схема
+(владелец): учебник = вся панель по последний закрытый месяц; шаг
+экзаменационного прохода = месяц (8 месяцев по сетке, без подглядывания).
+ЖЁСТКОЙ ПЛАНКИ БОЛЬШЕ НЕТ (решение владельца): модель сохраняется
+всегда, verdict в report.json = дымовой извещатель (проверка здоровья
+на последнем закрытом месяце: сигналы есть, ответы не бред). Не
+сдал извещатель -> retrain_server.sh оставляет старую модель и будит
+владельца. Карта калибровки строится из невиданных предсказаний
+фолдов как раньше."""
+
 import glob, json, time, zipfile, io, zlib, datetime
 import numpy as np, pandas as pd, lightgbm as lgb
 
 t0 = time.time()
 H = 10
 GATE = 0.65
-COOLDOWN_MS = 10 * 1800_000
 SLIP, TAKER_FEE, MAKER_FEE = 0.0005, 0.0005, 0.0002
 PARAMS = dict(n_estimators=200, learning_rate=0.05, max_depth=5,
               subsample=0.8, colsample_bytree=0.8, random_state=42,
@@ -120,11 +121,11 @@ for i, name in enumerate(members, 1):
 
 data = pd.concat(frames, ignore_index=True)
 del frames
-q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="Q")
-data["quarter"] = q.astype(str)
-quarters = sorted(data["quarter"].unique())
-idx = np.linspace(0, len(quarters) - 1, 8).round().astype(int)
-test_q = [quarters[i] for i in idx]
+q = pd.PeriodIndex(pd.to_datetime(data["ot"], unit="ms"), freq="M")
+data["month"] = q.astype(str)
+months = sorted(data["month"].unique())
+idx = np.linspace(0, len(months) - 1, 8).round().astype(int)
+test_q = [months[i] for i in idx]
 FEATS = ["ret_1", "ret_4", "ret_10", "ret_20", "h4_momentum",
          "atr_pct", "std_20", "skew", "vol_ratio", "taker_buy", "clv",
          "zscore", "rsi", "sma_cross", "btc_ret_10", "btc_ret_20",
@@ -135,15 +136,25 @@ print(f"строк {len(data)}, тест {test_q} | {time.time()-t0:.0f}с",
 
 def collect(d):
     pools = {int(fi): gg.sort_values("ot") for fi, gg in d.groupby("sym_id")}
+    # ПОДТВЕРЖДЕНИЕ (синхронно с боем 23.11, правило владельца): сигнал
+    # учитывается только если у той же монеты на ПРЕДЫДУЩЕМ баре порог
+    # тоже был пройден в ту же сторону (два бара подряд)
+    ps_ = d["p"].values
+    sy_ = d["sym_id"].values
+    ot_ = d["ot"].values
+    gate_ok = (ps_ > GATE) | (ps_ < 1 - GATE)
+    sides_ = np.where(ps_ > GATE, 1, -1)
+    prev_side = {(int(sy), int(t)): int(sd)
+                 for sy, t, sd in zip(sy_[gate_ok], ot_[gate_ok],
+                                      sides_[gate_ok])}
     rows = []
     for side in (1, -1):
         sel = d[(d["p"] > GATE) if side == 1 else (d["p"] < 1 - GATE)] \
             .sort_values(["sym_id", "ot"])
-        last = {}
         for row in sel.itertuples():
-            if row.ot - last.get(row.sym_id, -10**18) < COOLDOWN_MS:
+            if prev_side.get((int(row.sym_id),
+                              int(row.ot) - 1800_000)) != side:
                 continue
-            last[row.sym_id] = row.ot
             pool = pools.get(int(row.sym_id))
             if pool is None:
                 continue
@@ -170,67 +181,85 @@ def collect(d):
                 pnl = (c - exit_px) / c - MAKER_FEE - TAKER_FEE - SLIP
             if not filled:
                 continue
-            rows.append({"pnl": pnl, "quarter": row.quarter, "side": side})
+            rows.append({"pnl": pnl, "month": row.month, "side": side})
     return pd.DataFrame(rows)
 
-def null_pct(te, n_real, seeds=50):
-    rng = np.random.default_rng(7)
-    sub = te[["fwd"]].dropna()
-    if n_real < 20 or len(sub) < n_real:
-        return None
-    out = []
-    for _ in range(seeds):
-        s = sub.sample(n=n_real, random_state=rng.integers(1 << 30))
-        out.append((s["fwd"].values.astype("float64")
-                    - 2 * TAKER_FEE).mean() * 100)
-    return out
-
 all_T = []
-nulls = []
+oos_p = []
+oos_y = []
+
 for k, qq in enumerate(test_q):
-    trd = data[data["quarter"] < qq]
-    ted = data[data["quarter"] == qq]
+    trd = data[data["month"] < qq]
+    ted = data[data["month"] == qq]
     if len(ted) < 5000 or len(trd) < 200_000:
         continue
     m = lgb.LGBMClassifier(**PARAMS)
     m.fit(trd[FEATS], trd["y"], categorical_feature=["sym_id"])
     d = ted.assign(p=m.predict_proba(ted[FEATS])[:, 1])
     T = collect(d)
-    T["quarter"] = qq
+    T["month"] = qq
     all_T.append(T)
-    if k >= 6 and len(T):
-        nl = null_pct(ted, len(T))
-        if nl:
-            nulls.append(float(np.mean(np.array(nl)
-                                       < T["pnl"].mean() * 100) * 100))
+    oos_p.append(d["p"].values.astype("float64"))
+    oos_y.append(d["y"].values.astype("float64"))
     print(f"фолд {qq}: сделок {len(T)} | {time.time()-t0:.0f}с", flush=True)
 
 T = pd.concat(all_T, ignore_index=True)
 avg = float(T["pnl"].mean() * 100)
 by_q = {kk: round(v * 100, 3) for kk, v in
-        T.groupby("quarter")["pnl"].mean().items()}
+        T.groupby("month")["pnl"].mean().items()}
 pos_q = sum(1 for v in by_q.values() if v > 0)
-nl_pct = int(np.mean(nulls)) if nulls else 0
-verdict = bool(avg >= 0.10 and pos_q >= 5 and nl_pct >= 95)
-print(f"ИТОГ: {len(T)} сделок, avg {avg:+.4f}%, плюс-кв {pos_q}/8, "
-      f"нуль {nl_pct}% -> {'ДЕПЛОИМ' if verdict else 'НЕ СДАЛО'}",
-      flush=True)
+print(f"ПРОХОД: {len(T)} сделок, avg {avg:+.4f}%, "
+      f"плюс-месяцев {pos_q}/{len(by_q)} (справка, не гейт)", flush=True)
 
 syms = sorted({n.replace("_30m.csv", "") for n in members})
-if verdict:
-    mf = lgb.LGBMClassifier(**PARAMS)
-    dat = data.dropna(subset=["y"])
-    mf.fit(dat[FEATS], dat["y"], categorical_feature=["sym_id"])
-    mf.booster_.save_model("/kaggle/working/ml5h.txt")
-    json.dump({"trained_at": datetime.datetime.now(
-        datetime.timezone.utc).isoformat(),
-        "features": FEATS, "symbols": syms, "gate": GATE,
-        "hold_bars": H, "bar_minutes": 30,
-        "label": "storm_05atr_both_sides", "train_rows": int(len(dat)),
-        "universe": "wide", "verdict": True},
-        open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
-    print("модель сохранена", flush=True)
-json.dump({"verdict": verdict, "avg": round(avg, 4),
-           "pos_quarters": pos_q, "null_pct": nl_pct,
-           "by_quarter": by_q},
+mf = lgb.LGBMClassifier(**PARAMS)
+dat = data.dropna(subset=["y"])
+mf.fit(dat[FEATS], dat["y"], categorical_feature=["sym_id"])
+mf.booster_.save_model("/kaggle/working/ml5h.txt")
+json.dump({"trained_at": datetime.datetime.now(
+    datetime.timezone.utc).isoformat(),
+    "features": FEATS, "symbols": syms, "gate": GATE,
+    "hold_bars": H, "bar_minutes": 30,
+    "label": "storm_05atr_both_sides", "train_rows": int(len(dat)),
+    "universe": "wide", "scheme": "monthly"},
+    open("/kaggle/working/ml5h_meta.json", "w"), indent=1)
+print("модель сохранена (месячная схема)", flush=True)
+# КАЛИБРОВКА: изотоническая карта «сырая p -> истинный шанс» на
+# невиданных предсказаниях фолдов (едет на сервер вместе с моделью)
+try:
+    from sklearn.isotonic import IsotonicRegression
+    op = np.concatenate(oos_p); oy = np.concatenate(oos_y)
+    iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+    iso.fit(op, oy)
+    json.dump({"iso_x": iso.X_thresholds_.tolist(),
+               "iso_y": iso.y_thresholds_.tolist(),
+               "trained_at": datetime.datetime.now(
+                   datetime.timezone.utc).isoformat()},
+              open("/kaggle/working/calibration.json", "w"), indent=1)
+    print("калибровочная карта сохранена (",
+          len(iso.X_thresholds_), "точек)", flush=True)
+except Exception as e:
+    print("калибровка не построена:", e, flush=True)
+# ДЫМОВОЙ ИЗВЕЩАТЕЛЬ: здоровье готовой модели на последнем ЗАКРЫТОМ
+# месяце (модель его видела — это не экзамен, а проверка прибора).
+last_m = months[-1]
+smoke_d = data[data["month"] == last_m].dropna(subset=["y"])
+smoke = {"month": last_m, "ok": False, "n_signals": 0, "p_std": 0.0}
+if len(smoke_d) >= 500:
+    p_sm = mf.predict_proba(smoke_d[FEATS])[:, 1]
+    T_sm = collect(smoke_d.assign(p=p_sm))
+    pstd = float(np.std(p_sm))
+    smoke = {"month": last_m, "n_signals": int(len(T_sm)),
+             "p_std": round(pstd, 4),
+             "avg_bp": round(float(T_sm["pnl"].mean() * 100), 1)
+             if len(T_sm) else 0.0,
+             "ok": bool(len(T_sm) >= 20 and pstd >= 0.02)}
+verdict = smoke["ok"]
+print(f"ИЗВЕЩАТЕЛЬ ({last_m}): сигналов {smoke['n_signals']}, "
+      f"разброс p {smoke['p_std']:.3f} -> "
+      f"{'ЖИВАЯ, ДЕПЛОИМ' if verdict else 'СЛОМАНА, НЕ ДЕПЛОИМ'}",
+      flush=True)
+json.dump({"verdict": verdict, "mode": "monthly",
+           "smoke": smoke, "avg": round(avg, 4),
+           "pos_months": pos_q, "by_month": by_q},
           open("/kaggle/working/report.json", "w"), indent=1)

@@ -53,6 +53,15 @@ class Ml5hEngine:
         self.pos: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.day_pnl = Decimal(0)
+        # цепь подтверждения (идея владельца 23.11, победитель замера
+        # четырёх машин usdc-battle-replay: +34.3бп/сд, +859 на сотне):
+        # sym -> (ms бара, сторона) последнего сырого сигнала; вход
+        # только когда сигнал продержался два бара подряд в одну сторону
+        self._sig_prev: dict[str, tuple[int, int]] = {}
+        # журнал висящих заявок: переживает рестарт (дыра помощника 23.11)
+        self._pending_path = self.cfg.data_dir / "pending.json"
+        # жёсткий дневной кап: сработал хоть раз — торгуем только завтра
+        self._cap_latched = False
         self.day_key = datetime.now(timezone.utc).date()
         self.balance = Decimal(0)
         # ЖУРНАЛ СДЕЛОК: источник для сигнала переобучения (последние 30
@@ -70,21 +79,30 @@ class Ml5hEngine:
 
     # ---------- запуск ----------
     def _seed_model(self) -> None:
-        """Первый запуск на чистом сервере: модель из образа едет на том
-        данных (дальше живёт там и обновляется без пересборки)."""
-        if self.c.model_path.exists() and self.c.meta_path.exists():
-            return
+        """Первый запуск на чистом сервере: все 4 файла моделей из образа
+        едут на том данных (дальше живут там и обновляются без пересборки).
+        БЫЛО 2 из 4 (найдено при разборе переезда 14.11): без meta.txt и
+        calibration.json бот стартовал БЕЗ мета-замка и БЕЗ честного шанса —
+        урезанная система молча."""
         self.c.model_path.parent.mkdir(parents=True, exist_ok=True)
         import shutil
         base = Path(__file__).resolve().parent.parent / "models"
-        src_m, src_j = base / "ml5h.txt", base / "ml5h_meta.json"
-        if not (src_m.exists() and src_j.exists()):
+        names = ["ml5h.txt", "ml5h_meta.json", "meta.txt", "calibration.json"]
+        src = {n: base / n for n in names}
+        missing = [n for n, f in src.items() if not f.exists()]
+        if missing:
             raise RuntimeError(
-                "модель не найдена ни на томе данных, ни в образе — "
-                "положи ml5h.txt и ml5h_meta.json в data/models/")
-        shutil.copy(src_m, self.c.model_path)
-        shutil.copy(src_j, self.c.meta_path)
-        log.info("модель засеяна из образа на том данных")
+                f"в образе нет файлов моделей: {missing} — "
+                "положи их в models/ при сборке или в data/models/ на томе")
+        seeded = []
+        for n, f in src.items():
+            dst = self.c.model_path.parent / n
+            if not dst.exists():
+                shutil.copy(f, dst)
+                seeded.append(n)
+        if seeded:
+            log.info("модели засеяны из образа на том данных: %s",
+                     ", ".join(seeded))
 
     async def setup(self) -> None:
         self._seed_model()
@@ -96,6 +114,24 @@ class Ml5hEngine:
         if meta.get("gate"):
             self.c.gate = float(meta["gate"])
         self.model = lgb.Booster(model_file=str(self.c.model_path))
+        # метка времени загруженной модели: без неё первый же тик считает
+        # файл «новым», перезагружает и раздувает вселенную до паспорта
+        # (522 монеты вкл. делистнутые) — откатывая фильтр делистов (баг
+        # 14.11: вето делистнутых шторм-монет после каждого рестарта)
+        self._model_loaded_mtime = self._model_mtime()
+        # калибровка (07.11): карта «сырая уверенность -> настоящий шанс».
+        # Файл может отсутствовать — тогда работает сырой гейт 0.65.
+        self._cal_x = self._cal_y = None
+        try:
+            cal = json.loads((self.c.model_path.parent
+                              / "calibration.json").read_text())
+            self._cal_x = np.array(cal["iso_x"], dtype="float64")
+            self._cal_y = np.array(cal["iso_y"], dtype="float64")
+            log.info("калибровка загружена (%d точек) — гейт в настоящих %%",
+                     len(self._cal_x))
+        except Exception as e:
+            log.info("калибровки нет (%s) — гейт по сырой уверенности",
+                     str(e)[:50])
         log.info("модель %s: %d фич, %d символов, gate %.2f",
                  self.c.model_path.name, len(self.feats), len(self.symbols),
                  self.c.gate)
@@ -108,9 +144,12 @@ class Ml5hEngine:
                     model_file=str(self.c.meta_model_path))
                 log.info("мета: замок загружен (%s) — вето при p_win<0.5",
                          self.c.meta_model_path.name)
+                self._meta_loaded_mtime = self._meta_mtime()
             except Exception as e:
                 log.warning("мета: не загрузилась (%s) — торгую без неё",
                             str(e)[:80])
+                tg.fire(f"🚨 <b>МЕТА НЕ ЗАГРУЗИЛАСЬ</b> — бот торгует без "
+                        f"второго мнения: {str(e)[:100]}")
         # биржа — источник правды: символы, которых нет на демо, отсеиваем
         await asyncio.to_thread(self.ex.build_filters, self.symbols)
         live = [s for s in self.symbols if s in self.ex.filters]
@@ -123,7 +162,28 @@ class Ml5hEngine:
             await asyncio.to_thread(self.ex.setup_symbol, s)
         self.balance = await asyncio.to_thread(
             self.ex.account_wallet_balance, "USDT")
+        import os as _os
+        _ver = _os.environ.get("BOT_VERSION", "")
+        tg.fire(f"🟢 <b>ML5 бот запущен</b>{' · ' + _ver if _ver else ''}: "
+                f"{len(self.c.symbols) or len(self.symbols)} монет в паспорте | "
+                f"gate {self.c.gate:.2f} | "
+                f"честный гейт {'ВЫКЛ' if self.c.gate_true <= 0 else '≥' + str(self.c.gate_true)} | "
+                f"решётка 5ч вкл | мета {'вкл' if self.meta else '⚠️ НЕТ'} | "
+                f"стол {self.c.max_slots} | стоп −15% на бирже | кап дня 4%")
         await self._warmup()
+        # висящие заявки с диска (дыра помощника 23.11: рестарт во время
+        # живой заявки терял её из виду до ближайшей реконсиляции)
+        try:
+            if self._pending_path.exists():
+                restored = json.loads(self._pending_path.read_text())
+                for sym, p_ in restored.items():
+                    p_["qty"] = Decimal(str(p_["qty"]))
+                    self.pending[sym] = p_
+                if self.pending:
+                    log.info("pending восстановлен с диска: %s",
+                             list(self.pending))
+        except Exception:
+            log.exception("pending: восстановление не удалось")
         log.info("тёплый старт: %d/%d символов, баланс %s USDT",
                  len(self.bars), len(self.symbols), self.balance)
 
@@ -162,6 +222,12 @@ class Ml5hEngine:
         except Exception:
             return 0.0
 
+    def _meta_mtime(self) -> float:
+        try:
+            return self.c.meta_model_path.stat().st_mtime
+        except Exception:
+            return 0.0
+
     def maybe_reload_model(self) -> None:
         mt = self._model_mtime()
         if mt and mt != getattr(self, "_model_loaded_mtime", -1):
@@ -174,9 +240,21 @@ class Ml5hEngine:
                 self.feats = meta["features"]
                 if meta.get("gate"):
                     self.c.gate = float(meta["gate"])
-                new_syms = [s for s in (self.c.symbols or meta["symbols"])
-                            if s not in self.symbols]
-                self.symbols = self.c.symbols or meta["symbols"]
+                # вселенная после перезагрузки: паспорт МОДЕЛИ минус
+                # делистнутые (статус на бирже ≠ TRADING) — иначе после
+                # каждого рестарта мёртвые монеты возвращаются в работу
+                raw_syms = self.c.symbols or meta["symbols"]
+                self.symbols = [s for s in raw_syms if s in self.ex.filters]
+                new_syms = [s for s in self.symbols if s not in self.bars]
+                try:
+                    cal = json.loads((self.c.model_path.parent
+                                      / "calibration.json").read_text())
+                    self._cal_x = np.array(cal["iso_x"], dtype="float64")
+                    self._cal_y = np.array(cal["iso_y"], dtype="float64")
+                    log.info("калибровка перечитана (%d точек)",
+                             len(self._cal_x))
+                except Exception as e:
+                    log.warning("калибровка при перезагрузке: %s", str(e)[:60])
                 self._model_loaded_mtime = mt
                 import bot.telegram as tg
                 tg.fire(f"🧠 <b>ML-5ч</b>: новая модель получена "
@@ -190,6 +268,26 @@ class Ml5hEngine:
                          len(self.symbols), len(new_syms))
             except Exception as e:
                 log.warning("перезагрузка модели не удалась: %s", e)
+        # мета меняется ОТДЕЛЬНО от Бури (конвейер меты копирует только
+        # meta.txt) — свой mtime-трекер, иначе она живёт лишь до рестарта
+        # (помощник, 09.11)
+        mt_meta = self._meta_mtime()
+        if self.c.meta_gate and mt_meta \
+                and mt_meta != getattr(self, "_meta_loaded_mtime", -1):
+            try:
+                import lightgbm as lgb
+                self.meta = lgb.Booster(
+                    model_file=str(self.c.meta_model_path))
+                self._meta_loaded_mtime = mt_meta
+                import bot.telegram as tg
+                tg.fire("⚖️ <b>Мета</b>: новый замок подхвачен без рестарта")
+                log.info("мета перезагружена (обновлена %s)",
+                         datetime.fromtimestamp(mt_meta, timezone.utc)
+                         .strftime("%H:%M UTC"))
+            except Exception as e:
+                log.warning("перезагрузка меты не удалась: %s", e)
+                tg.fire(f"🚨 <b>МЕТА: перезагрузка не удалась</b> — живёт "
+                        f"предыдущая версия: {str(e)[:100]}")
 
     async def _refresh_day_xchg(self) -> None:
         """БИРЖА — ИСТОЧНИК ПРАВДЫ (владелец, 15.10): день = ВСЕ потоки
@@ -203,15 +301,34 @@ class Ml5hEngine:
         try:
             midnight = int(datetime.now(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-            r = await asyncio.to_thread(
-                self.ex.client.rest_api.get_income_history,
-                start_time=midnight, limit=1000)
-            inst = getattr(r.data(), "actual_instance", r.data())
-            rows_l = inst if isinstance(inst, list) else []
-            # день = торговля (сделки+комиссии+фандинг); переводы —
-            # движение денег, не заработок, иначе пополнение картинка дня
-            s = sum(float(getattr(x, "income", 0) or 0) for x in rows_l
-                    if getattr(x, "income_type", "") != "TRANSFER")
+            # ПОСТРАНИЧНО (дыра помощника 23.11: активный день >1000
+            # записей — одиночный запрос занижал день и кап опаздывал)
+            seen_keys = set()
+            s = 0.0
+            page_start = midnight
+            for _page in range(20):          # гард от вечного цикла
+                r = await asyncio.to_thread(
+                    self.ex.client.rest_api.get_income_history,
+                    start_time=page_start, limit=1000)
+                inst = getattr(r.data(), "actual_instance", r.data())
+                rows_l = inst if isinstance(inst, list) else []
+                page_max = 0
+                for x in rows_l:
+                    ts_x = int(getattr(x, "time", 0) or 0)
+                    it = str(getattr(x, "income_type", "") or "")
+                    inc = str(getattr(x, "income", "") or "")
+                    key = (ts_x, it, inc)
+                    if key in seen_keys or ts_x < midnight:
+                        continue
+                    seen_keys.add(key)
+                    page_max = max(page_max, ts_x)
+                    # день = торговля (сделки+комиссии+фандинг); переводы —
+                    # движение денег, не заработок
+                    if it != "TRANSFER":
+                        s += float(getattr(x, "income", 0) or 0)
+                if len(rows_l) < 1000 or page_max <= page_start:
+                    break
+                page_start = page_max
             self._day_xchg = Decimal(str(round(s, 6)))
         except Exception as e:
             log.warning("день с биржи не получен (%s) — счёт локальный",
@@ -220,9 +337,14 @@ class Ml5hEngine:
     async def tick(self) -> None:
         now = datetime.now(timezone.utc)
         self.maybe_reload_model()
+        if now.minute == 0 and now.hour != getattr(self, "_bal_hour", -1):
+            self._bal_hour = now.hour   # депозит днём сразу влияет на сайзинг
+            self.balance = await asyncio.to_thread(
+                self.ex.account_wallet_balance, "USDT")
         if now.date() != self.day_key:
             self.day_key = now.date()
             self.day_pnl = Decimal(0)
+            self._cap_latched = False   # новый день — защёлка сброшена
             self.balance = await asyncio.to_thread(
                 self.ex.account_wallet_balance, "USDT")
         if time.time() - getattr(self, "_last_recon", 0) >= 600:
@@ -245,13 +367,23 @@ class Ml5hEngine:
         day_cap = (min(self.c.day_cap_usdc, self.balance * self.cfg.daily_cap_pct)
                    if self.c.day_cap_usdc > 0
                    else self.balance * self.cfg.daily_cap_pct)
-        if self.day_pnl <= -day_cap:
+        if self._cap_latched or self.day_pnl <= -day_cap:
+            # раз в день сообщаем владельцу, что кап сработал (лимит > 0 —
+            # при пустом балансе кап=0 ложно срабатывает и молчание штатно)
+            self._cap_latched = True
+            if day_cap > 0 and getattr(
+                    self, "_cap_fired_key", None) != self.day_key:
+                self._cap_fired_key = self.day_key
+                tg.fire(f"🛑 <b>Дневной кап достигнут</b>: день "
+                        f"{float(self.day_pnl):+.2f} USDT из лимита "
+                        f"{float(day_cap):.2f} — новые входы до 00:00 UTC")
             # кап: отменяем ещё висящие входные заявки (иначе лазейка —
             # заявка, поставленная до капа, исполняется после него)
             for psym, pend in list(self.pending.items()):
                 await asyncio.to_thread(self.ex.cancel_order, psym,
                                         pend["oid"])
                 self.pending.pop(psym, None)
+                self._save_pending()
                 log.info("%s: входная заявка отменена (дневной кап)", psym)
             await self.manage()
             return
@@ -339,6 +471,27 @@ class Ml5hEngine:
             atr = x.get("atr_pct")
             if atr is not None and np.isfinite(atr):
                 atrs.append(float(atr))
+            # ПОДТВЕРЖДЕНИЕ («го» владельца 23.11, победитель замера из
+            # четырёх машин usdc-battle-replay v2/v3/v4/v5: +34.3бп/сд,
+            # +859 на сотне против +807 без паузы и +429 у решётки):
+            # смотрим каждую монету каждый бар, но вход только если
+            # сырой сигнал продержался два бара ПОДРЯД в одну сторону.
+            # Случайная вспышка не доживает до второго бара — фильтр
+            # отрезает её; шторм живёт дольше и проходит. Пока по монете
+            # открыта сделка/заявка — она не осматривается (цепь замрет).
+            now_ms = int(self.bars[sym]["open_time"].iloc[-1])
+            gate_now = p > self.c.gate or p < 1 - self.c.gate
+            side_now = 1 if p > self.c.gate else -1
+            if not gate_now:
+                self._sig_prev.pop(sym, None)
+            else:
+                confirmed = self._sig_prev.get(sym) == (now_ms - 1_800_000,
+                                                        side_now)
+                self._sig_prev[sym] = (now_ms, side_now)
+                if not confirmed:
+                    log.info("%s: сигнал ждёт подтверждения — вход на "
+                             "следующем баре, если повторится", sym)
+                    continue
             if p > self.c.gate or p < 1 - self.c.gate:
                 if self.meta is not None and atr is not None \
                         and np.isfinite(atr):
@@ -352,13 +505,16 @@ class Ml5hEngine:
                         pw = float(self.meta.predict(np.array([vec]))[0])
                     except Exception:
                         pw = 1.0
+                    log.info("мета: %s p=%.3f p_win=%.3f — %s",
+                             sym, p, pw,
+                             "ВЕТО" if pw < 0.5 else "принято")
                     if pw < 0.5:
                         self.meta_veto += 1
-                        log.info("мета: вето %s p=%.3f p_win=%.2f",
-                                 sym, p, pw)
                         continue
                     self.meta_pass += 1
-                scored.append([abs(p - 0.5), p, sym, atr])
+                # калибровка: истинный шанс роста рядом с сырой уверенностью
+                scored.append([abs(p - 0.5), p, sym, atr,
+                               self.true_prob(p)])
         # 1.5) фильтр «тихая треть» (рентген 12.10: сделки в нижней
         #      терцили ATR вселенной −3.2бп на 21.8к сделок, летучая
         #      треть +85.7). Порог = живая 1/3-квантиль atr_pct вселенной
@@ -397,16 +553,25 @@ class Ml5hEngine:
                            int(avail // margin_one))
             if slot_cap < slots:
                 slot_cap = slots     # уже открытое не считаем лишним
-        for conf, p, sym, _atr in scored:
+        for conf, p, sym, _atr, t_true in scored:
             if slots >= slot_cap:
                 log.info("очередь: %s p=%.3f — слотов нет (%d/%d, своб. маржа %s) — "
                          "ждёт следующего бара", sym, p, slots, slot_cap, avail)
                 continue
             try:
                 if p > self.c.gate:
+                    if t_true < self.c.gate_true:
+                        log.info("%s: честный шанс %.0f%% < %.0f%% — пропуск",
+                                 sym, t_true * 100, self.c.gate_true * 100)
+                        continue
                     await self.open_long(sym, p)
                     slots += 1
                 else:
+                    if 1 - t_true < self.c.gate_true:
+                        log.info("%s: честный шанс падения %.0f%% < %.0f%% — пропуск",
+                                 sym, (1 - t_true) * 100,
+                                 self.c.gate_true * 100)
+                        continue
                     await self.open_short(sym, p)
                     slots += 1
             except BinanceError as e:
@@ -434,6 +599,13 @@ class Ml5hEngine:
         if not fl or px <= 0:
             return Decimal(0)
         return fl.qty_for_notional(self.notional(sym), px) or Decimal(0)
+
+    def true_prob(self, p: float) -> float:
+        """Настоящий шанс роста по карте калибровки (np.interp по
+        изотоническим порогам). Без карты — сырая уверенность как есть."""
+        if self._cal_x is None:
+            return p
+        return float(np.interp(p, self._cal_x, self._cal_y))
 
     async def place_stop(self, sym: str, pos: dict) -> None:
         """БИРЖЕВОЙ СТОП (владелец 02.11): защита позиции живёт на бирже,
@@ -497,6 +669,14 @@ class Ml5hEngine:
         cap = int(avail // margin_one)
         return max(cap, len(self.pos) + len(self.pending), 0)
 
+    def _save_pending(self) -> None:
+        try:
+            tmp = self._pending_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.pending, default=str))
+            tmp.replace(self._pending_path)
+        except Exception:
+            log.exception("pending: сохранение не удалось")
+
     async def open_long(self, sym: str, p: float) -> None:
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
         if not top:
@@ -505,7 +685,6 @@ class Ml5hEngine:
         if bb <= 0:
             return
         df = self.bars[sym]
-        tick = float(df["close"].iloc[-1]) * 0  # цена — с биржи, не из баров
         qty = self.qty_for(sym, Decimal(str(bb)))
         if qty <= 0:
             log.warning("%s: лот не сошёлся — символ исключён", sym)
@@ -532,10 +711,12 @@ class Ml5hEngine:
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": bb, "p": p,
                              "ts": time.time(), "side": "LONG"}
+        self._save_pending()
         log.info("%s: GTX-вход выставлен @%s qty=%s p=%.3f", sym, bb, qty, p)
 
     async def open_short(self, sym: str, p: float) -> None:
-        """Зеркало open_long: SELL post-only по аску, taker-фолбэк."""
+        """Зеркало open_long: SELL post-only по аску; цена ушла сквозь
+        уровень — сигнал пропускается (как у лонга, без тейкер-погони)."""
         top = await asyncio.to_thread(self.ex.order_book_top, sym)
         if not top:
             return
@@ -562,18 +743,13 @@ class Ml5hEngine:
                 return
             raise
         if oid is None:
-            oid = await asyncio.to_thread(self.ex.place_market, sym, "SELL",
-                                          qty)
-            if oid is None:
-                return
-            info = await asyncio.to_thread(self.ex.query_order_full, sym, oid)
-            px = float((info or {}).get("avgPrice") or 0)
-            self.pos[sym] = {"qty": qty, "px": px, "entry_ts": time.time(),
-                             "p": p, "maker_entry": False, "side": "SHORT"}
-            tg.fire(f"🔴 <b>ML5 ВХОД {sym} ШОРТ</b> {qty} @ {px} (taker) p={p:.2f}")
+            # зеркало лонга: экзамен считал вход по цене лимитки —
+            # погоня тейкером = вход хуже обещанного, сигнал пропускаем
+            log.info("%s: цена ушла от уровня — сигнал пропущен", sym)
             return
         self.pending[sym] = {"oid": oid, "qty": qty, "px": ba, "p": p,
                              "ts": time.time(), "side": "SHORT"}
+        self._save_pending()
         log.info("%s: GTX-шорт выставлен @%s qty=%s p=%.3f", sym, ba, qty, p)
 
     async def close_short(self, sym: str, pos: dict, maker: bool) -> None:
@@ -773,6 +949,9 @@ class Ml5hEngine:
                                  "px": own["px"] or float(d.get("entryPrice", 0)),
                                  "entry_ts": own["ts"], "adopted": True,
                                  "side": "LONG" if amt > 0 else "SHORT"}
+                # после рестарта цепь подтверждения чистая: монете нужен
+                # заново сигнал двух баров подряд (консервативно)
+                self._sig_prev.pop(sym, None)
                 await self.place_stop(sym, self.pos[sym])
                 continue
             log.warning("%s: чужая позиция (%s) — усыновляю и закрываю",
@@ -829,12 +1008,14 @@ class Ml5hEngine:
                                      "entry_ts": time.time(),
                                      "maker_entry": True}
                     self.pending.pop(sym, None)
+                    self._save_pending()
                     await self.place_stop(sym, self.pos[sym])
                     tg.fire(f"🟢 <b>ML5 ВХОД {sym} "
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"{pend['qty']} @ {px} (мейкер) p={pend['p']:.2f}")
                     continue
                 self.pending.pop(sym, None)
+                self._save_pending()
                 info = await asyncio.to_thread(self.ex.query_order_full, sym,
                                                pend["oid"])
                 exq = Decimal(str((info or {}).get("executedQty") or 0))
@@ -844,6 +1025,9 @@ class Ml5hEngine:
                     self.pos[sym] = {"qty": exq, "px": px,
                                      "entry_ts": time.time(),
                                      "maker_entry": True, "partial": True}
+                    # страховка ДО закрытия (пакет брони 23.11): частичная
+                    # позиция ни секунды не живёт без биржевого стопа
+                    await self.place_stop(sym, self.pos[sym])
                     tg.fire(f"🟡 <b>ML5 {sym} "
                             f"{'ШОРТ' if pend.get('side') == 'SHORT' else 'ЛОНГ'}</b> "
                             f"частичный вход {exq} @ {px}")
@@ -881,6 +1065,7 @@ class Ml5hEngine:
             if (info or {}).get("status") == "FILLED":
                 px = float((info or {}).get("avgPrice") or pend["px"])
                 self.pending.pop(sym, None)
+                self._save_pending()
                 self.pos[sym] = {**pend, "px": px, "entry_ts": time.time(),
                                  "maker_entry": True,
                                  "side": pend.get("side", "LONG")}

@@ -5,8 +5,8 @@
 пакетов биржи):
 1. Докачивает дневные пакеты 30м-свечей (data.binance.vision) с
    27.09.2026 до вчерашнего дня — поверх кеша панели data_cache_30m.
-2. Прогоняет ЗАМОРОЖЕННУЮ модель (models/ml5h.txt) на барах вчерашнего
-   дня по всем монетам — как боевой движок: те же признаки, gate из
+2. Прогоняет модель из ЖИВОЙ папки боевых моделей (models/, маунт :ro)
+   на барах вчерашнего дня по всем монетам — как боевой движок: те же признаки, gate из
    мета, cooldown 10 баров, живая терциль atr_pct по вселенной бара
    (тот же фильтр «тихая треть», что в бою с 12.10).
 3. Каждый сигнал (с фильтром и без) получает исход side×fwd(10 баров)
@@ -20,10 +20,13 @@
 GTX-отказы и позиции движка (несколько лишних сигналов — против нас
 не играет: сравнение с фильтром/без на одних сигналах).
 """
+import hashlib
 import io
 import json
+import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -34,7 +37,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-ROOT = Path("/home/iek/PycharmProjects/USDC")
+ROOT = Path(os.environ.get("JUDGE_ROOT", "/home/iek/PycharmProjects/USDC"))
 sys.path.insert(0, str(ROOT))
 from ml5h.features import make_features, g_cross, sym_id  # noqa: E402
 
@@ -50,7 +53,8 @@ FEATS = list(META["features"])
 GATE = float(META.get("gate", 0.65))
 SYMS = [s for s in META["symbols"] if s != "BTCUSDT"] + ["BTCUSDT"]
 model = lgb.Booster(model_file=str(ROOT / "models" / "ml5h.txt"))
-META_PATH = JDIR / "meta.txt"
+# мета судьи = БОЕВАЯ мета (живая папка боевых, один источник правды)
+META_PATH = ROOT / "models" / "meta.txt"
 meta_model = None
 if META_PATH.exists():
     meta_model = lgb.Booster(model_file=str(META_PATH))
@@ -66,6 +70,53 @@ def daterange(a: date, b: date):
     while d <= b:
         yield d
         d += timedelta(days=1)
+
+
+def tg(text: str) -> None:
+    tok = os.environ.get("TELEGRAM_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if not tok or not chat:
+        return
+    try:
+        data = urllib.parse.urlencode(
+            {"chat_id": chat, "text": text,
+             "parse_mode": "HTML"}).encode()
+        urllib.request.urlopen(urllib.request.Request(
+            f"https://api.telegram.org/bot{tok}/sendMessage", data=data),
+            timeout=20)
+    except Exception as e:
+        print(f"ТГ не ушёл: {e}", flush=True)
+
+
+def model_audit() -> None:
+    """(в) штамп аудита: md5 четырёх моделей (вкл. calibration.json,
+    которую судья не грузит, но штампует) в результаты каждого прогона,
+    ТГ только при изменении с прошлого прогона (помощник, 09.11)."""
+    files = [("ml5h.txt", ROOT / "models" / "ml5h.txt"),
+             ("ml5h_meta.json", ROOT / "models" / "ml5h_meta.json"),
+             ("meta.txt", META_PATH),
+             ("calibration.json", ROOT / "models" / "calibration.json")]
+    stamp = {"run": str(yesterday_utc()),
+             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    for name, p in files:
+        try:
+            stamp[name] = hashlib.md5(p.read_bytes()).hexdigest()[:12]
+        except Exception:
+            stamp[name] = "нет"
+    apath = JDIR / "model_audit.jsonl"
+    prev = None
+    if apath.exists():
+        try:
+            prev = json.loads(apath.read_text().strip().splitlines()[-1])
+        except Exception:
+            prev = None
+    with open(apath, "a") as f:
+        f.write(json.dumps(stamp, ensure_ascii=False) + "\n")
+    changed = [k for k, _ in files if prev and stamp[k] != prev.get(k)]
+    if changed:
+        tg("⚖️ СУДЬЯ: сменился состав моделей!\n" + "\n".join(
+            f"{k}: {prev.get(k, '?')} → {stamp[k]}" for k in changed))
+        print("аудит моделей: изменилось " + ", ".join(changed), flush=True)
 
 def csv_path(sym: str, d: date) -> Path:
     return KCACHE / sym / f"{d.isoformat()}.csv"
@@ -223,8 +274,10 @@ def signals_and_rows(day: date):
             X["sym_id"] = float(sym_id(sym))
         if not set(FEATS).issubset(X.columns):
             continue                      # как feature_row: нет колонок -> None
-        mask = day_mask = (df["open_time"].values >= D0) & \
-                          (df["open_time"].values < D1)
+        # день + последний бар предыдущего дня (для цепи подтверждения,
+        # синхронно с боем 23.11: сигнал = порог пройден два бара подряд)
+        mask = (df["open_time"].values >= D0 - 1800_000) & \
+               (df["open_time"].values < D1)
         sub = df[mask]
         Xd = X[mask]
         if len(sub) == 0:
@@ -238,12 +291,13 @@ def signals_and_rows(day: date):
         ots = sub["open_time"].values[ok]
         atrs = Xd["atr_pct"].values[ok]
         vecs = np.column_stack([M, p, atrs])
-        rows.extend((sym, int(o), float(pp), float(a), float(c), v)
+        rows.extend((sym, int(o), float(pp), float(a), float(c), v,
+                     int(o) < D0)
                     for o, pp, a, c, v
                     in zip(ots, p, atrs, closes, vecs))
     # живая терциль ATR по вселенной каждого бара
     by_bar = {}
-    for sym, ot, p, atr, c, v in rows:
+    for sym, ot, p, atr, c, v, prevday in rows:
         if np.isfinite(atr):
             by_bar.setdefault(ot, []).append(atr)
     q33 = {ot: float(np.quantile(v, 1 / 3)) for ot, v in by_bar.items()
@@ -259,6 +313,7 @@ def main():
     else:
         D = yesterday_utc()
     print("судья за", D, flush=True)
+    model_audit()
     download_days(list(daterange(PANEL_FROM, D)), SYMS)
     global load_sym_btc
     btc = load_sym("BTCUSDT")
@@ -271,27 +326,38 @@ def main():
     tdir.mkdir(exist_ok=True)
     (tdir / f"{D}.json").write_text(json.dumps(
         sorted(top100), indent=0))
-    # cooldown 10 баров на символ, как в бою
+    # ПОДТВЕРЖДЕНИЕ (синхронно с боем 23.11, правило владельца): сигнал
+    # записывается только если сырой порог пройден два бара ПОДРЯД в одну
+    # сторону; первый бар дня подтверждается последним баром предыдущего
+    D0_ms = int(datetime(D.year, D.month, D.day,
+                         tzinfo=timezone.utc).timestamp() * 1000)
     rows.sort(key=lambda r: r[1])
-    last_sig = {}
+    prev = {}
     signals = []
-    for sym, ot, p, atr, c, vec in rows:
-        if ot - last_sig.get(sym, -10**18) >= 10 * 1800_000 \
-                and (p > GATE or p < 1 - GATE):
-            side = 1 if p > GATE else -1
-            in_f = np.isfinite(atr) and q33.get(ot) is not None \
-                and atr >= q33[ot]
-            s = {"sym": sym, "ot": ot, "side": side,
-                 "p": round(p, 4), "atr": atr,
-                 "in_filter": bool(in_f), "day": str(D),
-                 "top100": sym in top100,
-                 "vec": [round(float(x), 6) for x in vec]}
-            if meta_model is not None:
-                pw = float(meta_model.predict(np.array([vec]))[0])
-                s["pw"] = round(pw, 4)
-                s["meta_ok"] = bool(pw >= 0.5)
-            signals.append(s)
-            last_sig[sym] = ot
+    for sym, ot, p, atr, c, vec, prevday in rows:
+        gate = p > GATE or p < 1 - GATE
+        side = 1 if p > GATE else -1
+        if not gate:
+            prev.pop(sym, None)
+            continue
+        if prevday:                       # бар прошлого дня — только цепь
+            prev[sym] = (ot, side)
+            continue
+        if prev.get(sym, (None, None)) != (ot - 1800_000, side):
+            prev[sym] = (ot, side)
+            continue                      # ждёт подтверждения
+        in_f = np.isfinite(atr) and q33.get(ot) is not None \
+            and atr >= q33[ot]
+        s = {"sym": sym, "ot": ot, "side": side,
+             "p": round(p, 4), "atr": atr,
+             "in_filter": bool(in_f), "day": str(D),
+             "top100": sym in top100,
+             "vec": [round(float(x), 6) for x in vec]}
+        if meta_model is not None:
+            pw = float(meta_model.predict(np.array([vec]))[0])
+            s["pw"] = round(pw, 4)
+            s["meta_ok"] = bool(pw >= 0.5)
+        signals.append(s)
     sg_path = JDIR / "signals.jsonl"
     seen = set()
     if sg_path.exists():
@@ -315,6 +381,13 @@ def main():
             f.write(json.dumps(s) + "\n")
     print(f"новых сигналов {len(new)} (всего {len(seen) + len(new)})",
           flush=True)
+    # ФЛАГ ПЕРЕОБУЧЕНИЯ: если бот его выставил — уведомить владельца
+    # (решение о внеплановом пересмотре — его, автозапуска нет)
+    flag = ROOT / "data" / "signals" / "retrain_needed"
+    if flag.exists():
+        import bot.telegram as tgmod
+        tgmod.fire("🧠⚠️ Флаг переобучения активен (30 сделок в минусе) — "
+                   "требуется решение владельца")
 
     # --- разрешение исходов: закрываемые при текущем кеше ---
     closes_all = {}
@@ -324,6 +397,20 @@ def main():
         if df is not None:
             closes_all[sym] = (df["open_time"].values,
                                df["close"].values)
+    # ЧЕСТНАЯ ФОРМУЛА ЭКЗАМЕНА: стоп -15% по реальным low/high свечей
+    # (худший случай внутри бара: стоп раньше тейка), комиссии как в бою.
+    lows_all = {}; highs_all = {}
+    for sym in {s["sym"] for s in _load_signals()} | {s["sym"] for s in new}:
+        df = load_sym(sym)
+        if df is not None:
+            lows_all[sym] = df["low"].values; highs_all[sym] = df["high"].values
+    def honest_pnl(sym, ot, side, cls, j):
+        stop = cls[j] * (1 - 0.15) if side == 1 else cls[j] * (1 + 0.15)
+        for k in range(j + 1, min(j + 11, len(cls))):
+            lo, hi = lows_all[sym][k], highs_all[sym][k]
+            if side == 1 and lo <= stop: return stop, True
+            if side == -1 and hi >= stop: return stop, True
+        return cls[min(j + 10, len(cls) - 1)], False
     res_path = JDIR / "results.jsonl"
     done = set()
     if res_path.exists():
@@ -342,8 +429,10 @@ def main():
         j = int(np.searchsorted(ots, s["ot"]))
         if j + 10 >= len(ots) or ots[j] != s["ot"]:
             continue                          # ещё не доехал
-        pnl = s["side"] * (cls[j + 10] / cls[j] - 1) * 1e4 - 10.0
-        out = dict(s, pnl_bp=round(float(pnl), 2))
+        exit_px, stopped = honest_pnl(s["sym"], s["ot"], s["side"], cls, j)
+        pnl = s["side"] * (exit_px / cls[j] - 1) * 1e4 - 10.0
+        if stopped: pnl -= 12.0   # стоп = тейкер-выход: ком+слип поверх
+        out = dict(s, pnl_bp=round(float(pnl), 2), stopped=bool(stopped))
         resolved.append(out)
     if resolved:
         with open(res_path, "a") as f:
@@ -379,16 +468,22 @@ def main():
                 f"• вердикт: {v_filt}"]
         meta_lines = []
         if "meta_ok" in df.columns:
-            mo = df[df["meta_ok"]]
+            mo = df[df["meta_ok"] == True]   # noqa: E712 (NaN-устойчиво)
+            mn = df[df["meta_ok"] == False]  # noqa: E712 (NaN — не вето)
             avg_mo = mo.pnl_bp.mean() if len(mo) else float("nan")
+            avg_mn = mn.pnl_bp.mean() if len(mn) else float("nan")
             d_meta = avg_mo - avg_all
             v_meta = verd(d_meta, 5)
             plain.append(f" | мета-да {len(mo)}: "
                          f"{avg_mo if len(mo) else float('nan'):+.1f}бп")
+            if len(mn):
+                plain.append(f" | мета-нет {len(mn)}: {avg_mn:+.1f}бп")
             meta_lines = ["",
                           "🤝 <b>Мета — «второе мнение»</b>:",
                           f"• подтверждено ею: {len(mo)} → "
                           f"<b>{avg_mo:+.1f} бп</b>",
+                          f"• завернуто ею: {len(mn)} → "
+                          f"{avg_mn:+.1f} бп",
                           f"• средний сигнал: {avg_all:+.1f} бп",
                           f"• вердикт: {v_meta}"]
         plain_sides, sides = [], []
@@ -401,7 +496,7 @@ def main():
                              f"<b>{d2.pnl_bp.mean():+.1f} бп</b>")
         both_txt = ""
         if "meta_ok" in df.columns:
-            both = df[df["meta_ok"] & df["in_filter"]]
+            both = df[(df["meta_ok"] == True) & df["in_filter"]]  # noqa: E712
             if len(both):
                 both_txt = (f"  мета+фильтр: n={len(both)} "
                             f"{both.pnl_bp.mean():+.1f}бп")
