@@ -58,7 +58,7 @@ class ML5HConfig(BaseModel):
     symbols: list[str] = []
     model_path: Path = ROOT / "data" / "models" / "ml5h.txt"   # на томе данных: обновление без пересборки
     meta_path: Path = ROOT / "data" / "models" / "ml5h_meta.json"
-    gate: float = 0.55               # заморожено на этапе исследования
+    gate: float = 0.55               # запасной гейт, если в паспорте модели нет
     hold_bars: int = 10              # 10 x 30м = 5 часов
     bar_minutes: int = 30
     warmup_bars: int = 1000          # 30м-баров истории на старте
@@ -155,6 +155,34 @@ class Config(BaseModel):
             cfg.ml5h.taker_fallback = os.environ["ML5H_TAKER_FALLBACK"] == "1"
         if os.environ.get("ML5H_MAX_SLOTS"):
             cfg.ml5h.max_slots = int(os.environ["ML5H_MAX_SLOTS"])
+        # остальные боевые параметры Бури — всё через env (26.11:
+        # «ничего не хардкоди, по максимуму всё в env», владелец)
+        if os.environ.get("ML5H_GATE"):
+            cfg.ml5h.gate = float(os.environ["ML5H_GATE"])
+        if os.environ.get("ML5H_HOLD_BARS"):
+            cfg.ml5h.hold_bars = int(os.environ["ML5H_HOLD_BARS"])
+        if os.environ.get("ML5H_BAR_MINUTES"):
+            cfg.ml5h.bar_minutes = int(os.environ["ML5H_BAR_MINUTES"])
+        if os.environ.get("ML5H_WARMUP_BARS"):
+            cfg.ml5h.warmup_bars = int(os.environ["ML5H_WARMUP_BARS"])
+        if os.environ.get("ML5H_NOTIONAL_PCT"):
+            cfg.ml5h.notional_pct = Decimal(os.environ["ML5H_NOTIONAL_PCT"])
+        if os.environ.get("ML5H_MARGIN_POOL_PCT"):
+            cfg.ml5h.margin_pool_pct = Decimal(os.environ["ML5H_MARGIN_POOL_PCT"])
+        if os.environ.get("ML5H_MIN_NOTIONAL_BUFFER"):
+            cfg.ml5h.min_notional_buffer = Decimal(
+                os.environ["ML5H_MIN_NOTIONAL_BUFFER"])
+        if os.environ.get("ML5H_ENTRY_TTL_S"):
+            cfg.ml5h.entry_ttl_s = int(os.environ["ML5H_ENTRY_TTL_S"])
+        if os.environ.get("ML5H_EXIT_TTL_S"):
+            cfg.ml5h.exit_ttl_s = int(os.environ["ML5H_EXIT_TTL_S"])
+        if os.environ.get("ML5H_LEVERAGE"):
+            cfg.ml5h.leverage = int(os.environ["ML5H_LEVERAGE"])
+        if os.environ.get("ML5H_EMERGENCY_STOP_PCT"):
+            cfg.ml5h.emergency_stop_pct = Decimal(
+                os.environ["ML5H_EMERGENCY_STOP_PCT"])
+        if os.environ.get("DAILY_CAP_PCT"):
+            cfg.daily_cap_pct = Decimal(os.environ["DAILY_CAP_PCT"])
         cfg.lob.enabled = os.environ.get("LOB_ENABLED", "1") == "1"
         if os.environ.get("ML5H_SYMBOLS"):
             cfg.ml5h.symbols = [s.strip().upper() for s in
